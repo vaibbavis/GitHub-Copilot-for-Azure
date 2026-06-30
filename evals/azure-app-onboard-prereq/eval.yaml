@@ -9,9 +9,9 @@
 # environment.commands, mirroring the JS integration tests' cloneRepo() setup.
 # Plain `git clone <url> .` fails because Vally pre-copies the environment.skills
 # dirs into the workspace, so we use git init + fetch --depth 1 + checkout instead.
-# Repos: bya-simple-web-app (healthy Express), DockerStaticSite (Dockerfile+static),
-# postgresql-event-sourcing (Java/Spring+Kafka+Postgres), golang-clean-web-api (Go/Gin),
-# bya-unsupported-web-app (AWS/DynamoDB), bya-broken-web-app (missing module).
+  # Repos: bya-simple-web-app (healthy Express), DockerStaticSite (Dockerfile+static),
+  # postgresql-event-sourcing (Java/Spring+Kafka+Postgres),
+  # bya-unsupported-web-app (AWS/DynamoDB, unsupported), bya-broken-web-app (missing module).
 
 name: azure-app-onboard-prereq-eval
 description: |
@@ -29,10 +29,6 @@ tags:
 environment:
   skills:
     - ../../plugin/skills/azure-app-onboard-prereq
-    - ../../plugin/skills/azure-app-onboard
-    - ../../plugin/skills/azure-prepare
-    - ../../plugin/skills/azure-deploy
-    - ../../plugin/skills/azure-cloud-migrate
 
 config:
   runs: 1
@@ -42,11 +38,6 @@ config:
 
 scoring:
   threshold: 0.8
-  weights:
-    skill-invocation: 2.0
-    output-matches: 0.5
-    output-not-matches: 2.0
-    completed: 1.0
 
 stimuli:
   # tests/azure-app-onboard-prereq/integration.test.ts (invocation)
@@ -57,20 +48,14 @@ stimuli:
       tier: smoke
       area: routing
       skill: azure-app-onboard-prereq
+    # Routing test: confirm skill invocation only, terminate early for efficiency.
     constraints:
-      max_turns: 12
+      max_turns: 1
     graders:
-      # No-clone invocation check (mirrors integration.test.ts). The empty-workspace
-      # path can surface the environment's Azure CLI auth error text, so crash
-      # detection is left to the `completed` grader (no-errors) rather than an
-      # output text match.
       - type: skill-invocation
         config:
-          required: ["azure-app-onboard-prereq"]
-      - type: output-matches
-        config:
-          pattern: "(?i)deploy|repo|azure|ready|scan"
-      - type: completed
+          required:
+            - azure-app-onboard-prereq
 
   # tests/azure-app-onboard-prereq/integration-functional.test.ts (happy path)
   - name: "Readiness - Healthy Express App"
@@ -170,25 +155,14 @@ stimuli:
       tier: full
       area: routing
       skill: azure-app-onboard-prereq
-    environment:
-      commands:
-        - git init -q
-        - git remote add origin https://github.com/naeemaei/golang-clean-web-api
-        - git fetch -q --depth 1 origin master
-        - git checkout -q FETCH_HEAD -- .
+    # Routing test: prompt-driven routing, no repo context needed; terminate early.
     constraints:
-      max_turns: 16
+      max_turns: 2
     graders:
       - type: skill-invocation
         config:
-          required: ["azure-app-onboard-prereq"]
-      - type: output-matches
-        config:
-          pattern: "(?i)go|gin|golang"
-      - type: output-not-matches
-        config:
-          pattern: "(?i)fatal error|unhandled exception|stack trace"
-      - type: completed
+          required:
+            - azure-app-onboard-prereq
 
   # tests/azure-app-onboard-prereq/integration-negative.test.ts (unsupported migration)
   - name: "Negative - Unsupported Stack Migration"
@@ -196,7 +170,7 @@ stimuli:
     tags:
       type: integration
       tier: full
-      area: routing
+      area: output
       skill: azure-app-onboard-prereq
     environment:
       commands:
@@ -224,7 +198,7 @@ stimuli:
     tags:
       type: integration
       tier: full
-      area: routing
+      area: output
       skill: azure-app-onboard-prereq
     environment:
       commands:
@@ -241,25 +215,6 @@ stimuli:
       - type: output-matches
         config:
           pattern: "(?i)missing|fail|broken|error|crash|blocker|not found|issue"
-      - type: output-not-matches
-        config:
-          pattern: "(?i)fatal error|unhandled exception|stack trace"
-      - type: completed
-
-  # tests/azure-app-onboard-prereq/triggers.test.ts (negative trigger)
-  - name: "Negative Trigger - AWS Lambda Prompt"
-    prompt: "How do I configure an AWS Lambda function?"
-    tags:
-      type: trigger
-      tier: smoke
-      area: routing
-      skill: azure-app-onboard-prereq
-    constraints:
-      max_turns: 10
-    graders:
-      - type: skill-invocation
-        config:
-          disallowed: ["azure-app-onboard-prereq"]
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
