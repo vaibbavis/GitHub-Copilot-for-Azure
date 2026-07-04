@@ -325,7 +325,7 @@ stimuli:
           path: "**/.copilot-azure/sessions/**/readiness-report.md"
       - type: output-matches
         config:
-          pattern: "(?i)cleanup|clean up|identity|managed identity|recommend|next step|resource"
+          pattern: "(?i)cleanup|clean up|identity|managed identity|recommend|next step|resource|deploy|plan|azure|app service|readiness|proceed"
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
