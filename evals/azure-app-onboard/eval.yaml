@@ -47,13 +47,29 @@ scoring:
 stimuli:
   # ── deploy/integration-container-apps.test.ts ──────────────────────
   # test: e2e — wetty deploys code to Container Apps, not just IaC
+  # Faithful to Jest: 10-turn followUp (SUBSCRIPTION_PRIMER + 9 "Yes"), earlyTerminate on
+  # ACR build / Bicep deploy / deploy-result.json write / terraform (bad path).
+  # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy - Wetty Code To Container Apps"
     prompt: "I want to take my local app and put it in the cloud — where do I start?"
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+acr\\s+build"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+deployment\\s+(sub|group)\\s+create"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"terraform\\s+(apply|init)"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file","argsPattern":"deploy-result\\.json"}]'
     environment:
       commands:
         - git init -q
@@ -61,222 +77,228 @@ stimuli:
         - git fetch -q --depth 1 origin main
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/readiness-report.md"
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"components"\s*:\s*\[\s*\{'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"f1Viable"\s*:\s*(true|false)'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/context.json"
-          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: "(?i)node|typescript|docker"
+      # Container Apps must be the target compute
       - type: output-matches
         config:
-          pattern: "(?i)container app|docker|image|containeriz"
+          pattern: "(?i)container.?apps"
+      # Bicep must be used — not Terraform, not azd
       - type: output-matches
         config:
-          pattern: "(?i)deploy|code|build|push"
+          pattern: "(?i)bicep|\\.bicep|az deployment (sub|group) create"
+      # ACR build MUST have executed (code deploy, not just IaC);
+      # Terraform and azd up/provision/deploy MUST NOT have executed
+      - type: tool-calls
+        config:
+          required:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+acr\\s+build|docker\\s+(build|push)"
+          disallowed:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)terraform\\s+(init|plan|apply)"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)azd\\s+(up|provision|deploy)\\b"
+      # Must NOT hand back manual "Next Steps" for code deploy instead of executing it
+      - type: output-not-matches
+        config:
+          pattern: "(?i)next steps.{0,100}(docker build|docker push|deploy your code|az containerapp update)"
+      # Bicep is the default IaC format — must NOT use Terraform
+      - type: output-not-matches
+        config:
+          pattern: "(?i)terraform\\s+(init|plan|apply)|hashicorp/azurerm"
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
 
   # ── deploy/integration-deploy-verification.test.ts ─────────────────
   # test: App Service deploy — safety, depth, imperative-CLI/Entra-auth, password
+  # Faithful to Jest: seeded deploy-ready fixture (fixtures/deploy-app-service),
+  # DEPLOY_PHASE_FOLLOW_UPS (4 turns), earlyTerminate on pipeline complete
+  # (deployment-summary.md written / deploy-result terminal). NO `completed` grader.
+  # Fixture is intentionally fetched from the vaibbavis fork's fixtures/deploy-* branches.
   - name: "Deploy Verify - App Service Pipeline"
     prompt: "Use the azure-app-onboard skill to deploy my code to Azure."
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"deployment-summary\\.md"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"status\"\\s*:\\s*\"(succeeded|failed)\""}]'
     environment:
       commands:
         - git init -q
-        - git remote add origin https://github.com/samcdonald-ms/bya-simple-web-app
-        - git fetch -q --depth 1 origin main
+        - 'git remote add origin https://github.com/vaibbavis/GitHub-Copilot-for-Azure.git'
+        - git fetch -q --depth 1 origin fixtures/deploy-app-service
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
+      # deploy-result.json written with the required schema fields
+      - type: json-object-rules
+        config:
+          path: "**/.copilot-azure/sessions/*/deploy-result.json"
+          rules:
+            - type: "has-property"
+              key: "status"
+            - type: "has-property"
+              key: "subscriptionId"
+            - type: "has-property"
+              key: "resourceGroupName"
+            - type: "has-property"
+              key: "sessionId"
+      # deployment summary + phase artifacts
       - type: file-exists
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
       - type: file-exists
         config:
-          path: "**/.copilot-azure/sessions/**/readiness-report.md"
-      - type: file-matches
+          path: "**/.copilot-azure/sessions/**/deploy-checklist.md"
+      - type: file-exists
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"components"\s*:\s*\[\s*\{'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"f1Viable"\s*:\s*(true|false)'
+          path: "**/.copilot-azure/sessions/**/scaffold-manifest.json"
       - type: file-matches
         config:
           path: "**/.copilot-azure/sessions/**/context.json"
-          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
+          pattern: '"completedPhases"\s*:\s*\[[^\]]*"deploy"'
+      # generated Bicep carries the app-onboard-skill tag
       - type: file-matches
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: "(?i)express|node"
-      - type: output-matches
+          path: "**/infra/**/*.bicep"
+          pattern: "app-onboard-skill"
+      # preflight ordering: az account show (auth) before az deployment
+      - type: tool-calls
         config:
-          pattern: "(?i)deploy|app service|bicep|infra"
-      - type: output-not-matches
+          sequence:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az account show"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az deployment (sub|group) create"
+      # no imperative resource mutation / azd / config-zip
+      - type: tool-calls
         config:
-          pattern: "(?i)az group create|az appservice plan create|az webapp create"
+          disallowed:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)azd\\s+(up|provision|deploy)\\b"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+(webapp|functionapp)\\s+update|az\\s+appservice\\s+plan\\s+update"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)config-zip"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+(group|webapp|appservice)\\s+create"
       - type: output-not-matches
         config:
           pattern: '(?i)graph\.microsoft\.com'
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
-      # Behavior check: no imperative resource-creation CLI (safe IaC deploy only),
-      # asserted against executed tool-call args rather than assistant text
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice)\\s+create\\b"
-      - type: completed
 
   # test: Container Apps deploy — depth + safety (seeded fixture)
+  # Faithful to Jest: seeded deploy-ready fixture (fixtures/deploy-container-apps),
+  # DEPLOY_PHASE_FOLLOW_UPS (4 turns), earlyTerminate on ACR build / Bicep deploy /
+  # deploy-result terminal / terraform. NO `completed` grader.
   - name: "Deploy Verify - Container Apps Pipeline"
     prompt: "Use the azure-app-onboard skill to deploy my code to Azure."
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+acr\\s+build"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+deployment\\s+(sub|group)\\s+create"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"terraform\\s+(apply|init)"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"status\"\\s*:\\s*\"(succeeded|failed)\""}]'
     environment:
       commands:
         - git init -q
-        - git remote add origin https://github.com/butlerx/wetty
-        - git fetch -q --depth 1 origin main
+        - 'git remote add origin https://github.com/vaibbavis/GitHub-Copilot-for-Azure.git'
+        - git fetch -q --depth 1 origin fixtures/deploy-container-apps
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
+      - type: json-object-rules
+        config:
+          path: "**/.copilot-azure/sessions/*/deploy-result.json"
+          rules:
+            - type: "has-property"
+              key: "status"
+            - type: "has-property"
+              key: "subscriptionId"
+            - type: "has-property"
+              key: "resourceGroupName"
+            - type: "has-property"
+              key: "sessionId"
       - type: file-exists
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/readiness-report.md"
+          path: "**/.copilot-azure/sessions/**/deploy-checklist.md"
+      # managed identity present in generated IaC
       - type: file-matches
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
+          path: "**/infra/**/*.bicep"
+          pattern: "(?i)identity|managedidentity|systemassigned|userassigned"
+      # app-onboard-skill tag present
       - type: file-matches
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"components"\s*:\s*\[\s*\{'
-      - type: file-matches
+          path: "**/infra/**/*.bicep"
+          pattern: "app-onboard-skill"
+      # ACR build executed; no terraform / azd / imperative create
+      - type: tool-calls
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"f1Viable"\s*:\s*(true|false)'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/context.json"
-          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: "(?i)node|typescript|docker"
-      - type: output-matches
-        config:
-          pattern: "(?i)container app|docker|deploy|bicep|infra"
+          required:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+acr\\s+build|docker\\s+(build|push)"
+          disallowed:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)azd\\s+(up|provision|deploy)\\b"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)terraform\\s+(init|plan|apply)"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+containerapp\\s+create"
       - type: output-not-matches
         config:
-          pattern: "(?i)az group create|az containerapp create"
+          pattern: "(?i)next steps.{0,100}(docker build|docker push|deploy your code|az containerapp update)"
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
 
   # ── deploy/integration-depth.test.ts ───────────────────────────────
   # test: deploy writes audit log and deploy-result.json with correct schema
+  # Faithful to Jest: 4-turn followUp, earlyTerminate when deploy-result.json reaches a
+  # terminal status. Checks deploy-result.json schema + audit log + phase artifacts.
+  # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy Depth - Audit Log And Result Schema"
-    turns:
-      - "I'm new to Azure. Can you get my existing app running without me setting up infrastructure?"
-      - "Continue without fixing — complete the readiness assessment and record the results."
-      - "Before we wrap up, give me a short recap: the languages/frameworks and Azure services you detected, the main components and their dependencies, the overall readiness verdict, and the recommended next steps to deploy."
+    prompt: "I'm new to Azure. Can you get my existing app running without me setting up infrastructure?"
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults, cheapest option."
+        - "Yes, proceed with scaffolding."
+        - "Yes, deploy to Azure now."
+        - "Yes, confirm the deployment."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"status\"\\s*:\\s*\"(succeeded|failed|in-progress)\""}]'
     environment:
       commands:
         - git init -q
@@ -284,70 +306,81 @@ stimuli:
         - git fetch -q --depth 1 origin main
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
+      # deploy-result.json must exist with the required schema fields
+      - type: json-object-rules
+        config:
+          path: "**/.copilot-azure/sessions/*/deploy-result.json"
+          rules:
+            - type: "has-property"
+              key: "status"
+            - type: "has-property"
+              key: "subscriptionId"
+            - type: "has-property"
+              key: "resourceGroupName"
+            - type: "has-property"
+              key: "sessionId"
+      # deploy-audit.log must exist (incremental deploy log)
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-audit.log"
+      # full phase progression artifacts
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/context.json"
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/prereq-output.json"
       - type: file-exists
         config:
-          path: "**/.copilot-azure/sessions/**/readiness-report.md"
-      - type: file-matches
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+      - type: file-exists
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"components"\s*:\s*\[\s*\{'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"f1Viable"\s*:\s*(true|false)'
+          path: "**/.copilot-azure/sessions/**/scaffold-manifest.json"
+      # context.json shows deploy in completedPhases
       - type: file-matches
         config:
           path: "**/.copilot-azure/sessions/**/context.json"
-          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: "(?i)express|node"
-      - type: output-matches
-        config:
-          pattern: "(?i)deploy|audit|log|result|record|infra"
-      - type: output-not-matches
-        config:
-          pattern: "(?i)fatal error|unhandled exception|stack trace"
+          pattern: '"completedPhases"\s*:\s*\[[^\]]*"deploy"'
+      # must deploy via az deployment, NOT azd
       - type: tool-calls
         config:
           disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)azd\\s+(up|provision|deploy)\\b"
+      # must NOT generate azure.yaml
+      - type: file-not-exists
+        config:
+          path: "**/azure.yaml"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # test: healing loop pauses for user after 3 failed attempts
+  # Faithful to Jest: 7-turn followUp injecting repeated quota failures; earlyTerminate
+  # when deploy-result.json reaches a terminal status. Checks healingAttempts + user pause.
+  # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy Depth - Healing Loop Pauses After Retries"
-    turns:
-      - "I just signed up for Azure. What's the fastest way to bring my app over?"
-      - "Continue without fixing — complete the readiness assessment."
-      - "Before we wrap up, give me a short recap: the languages/frameworks and Azure services you detected, the main components and their dependencies, the overall readiness verdict, and the recommended next steps to deploy."
+    prompt: "I just signed up for Azure. What's the fastest way to bring my app over?"
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults."
+        - "Yes, proceed."
+        - "Deployment failed: The subscription does not have enough cores quota for 'Standard B1ms' in region 'eastus'. Required: 1, Available: 0."
+        - "Try a different region."
+        - "That also failed: Same quota error in westus2."
+        - "Try another region."
+        - "Still failing: Quota exhausted in centralus too."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"status\"\\s*:\\s*\"(succeeded|failed|in-progress)\""}]'
     environment:
       commands:
         - git init -q
@@ -355,67 +388,50 @@ stimuli:
         - git fetch -q --depth 1 origin main
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      - type: file-exists
+      # deploy-result.json records healing attempts
+      - type: json-object-rules
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/readiness-report.md"
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"overallHealth"\s*:\s*"(ready|readyWithCaveats|blocked)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"components"\s*:\s*\[\s*\{'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"f1Viable"\s*:\s*(true|false)'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/context.json"
-          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: "(?i)express|node"
+          path: "**/.copilot-azure/sessions/*/deploy-result.json"
+          rules:
+            - type: "has-property"
+              key: "status"
+            - type: "has-property"
+              key: "healingAttempts"
+      # after repeated failures the agent pauses and asks the user for direction
       - type: output-matches
         config:
-          pattern: "(?i)deploy|retry|attempt|pause|fail|heal|resolve"
+          pattern: "(?i)would you like|should i continue|should i|what would you|alternative|stop|suggestion|try that"
+      # agent offers alternative regions or SKUs
+      - type: output-matches
+        config:
+          pattern: "(?i)region|eastus2|westus|centralus|sku|tier|\\bb1\\b|\\bs1\\b|\\bp1\\b"
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
 
   # test: deploy-result.json written even on deployment failure
+  # Faithful to Jest: 4-turn followUp injecting an authorization failure; earlyTerminate
+  # when deploy-result.json reaches a terminal status. deploy-result.json ALWAYS written.
+  # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy Depth - Result Written On Failure"
     prompt: "I built a side project and want to get it live on Azure"
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults."
+        - "Yes, proceed."
+        - "Deployment failed with: AuthorizationFailed — The client does not have authorization to perform action 'Microsoft.Resources/subscriptions/resourcegroups/write'."
+        - "No, don't deploy. Stop here."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"status\"\\s*:\\s*\"(succeeded|failed|in-progress)\""}]'
     environment:
       commands:
         - git init -q
@@ -423,137 +439,112 @@ stimuli:
         - git fetch -q --depth 1 origin main
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      - type: file-exists
+      # deploy-result.json written even on failure, with required schema
+      - type: json-object-rules
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/readiness-report.md"
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"components"\s*:\s*\[\s*\{'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"f1Viable"\s*:\s*(true|false)'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/context.json"
-          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: "(?i)express|node"
+          path: "**/.copilot-azure/sessions/*/deploy-result.json"
+          rules:
+            - type: "has-property"
+              key: "status"
+            - type: "has-property"
+              key: "subscriptionId"
+            - type: "has-property"
+              key: "sessionId"
+      # agent classifies the authorization error and suggests an RBAC fix
       - type: output-matches
         config:
-          pattern: "(?i)deploy|result|record|fail|error|status"
+          pattern: "(?i)authorizationfailed|authorization|not authorized|rbac|role assignment|az role assignment"
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
 
   # ── deploy/integration-handoff.test.ts ─────────────────────────────
   # test: handoff presents cleanup, identity, and recommendations after deploy
+  # Faithful to Jest: seeded deploy-ready fixture (fixtures/deploy-app-service),
+  # DEPLOY_PHASE_FOLLOW_UPS (4 turns), earlyTerminate on handoff (deployment-summary.md
+  # written). Checks handoff content + phase artifacts. NO `completed` grader.
   - name: "Deploy Handoff - Cleanup Identity Recommendations"
     prompt: "Use the azure-app-onboard skill to deploy my code to Azure."
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"deployment-summary\\.md"}]'
     environment:
       commands:
         - git init -q
-        - git remote add origin https://github.com/samcdonald-ms/bya-simple-web-app
-        - git fetch -q --depth 1 origin main
+        - 'git remote add origin https://github.com/vaibbavis/GitHub-Copilot-for-Azure.git'
+        - git fetch -q --depth 1 origin fixtures/deploy-app-service
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
       - type: file-exists
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
       - type: file-exists
         config:
-          path: "**/.copilot-azure/sessions/**/readiness-report.md"
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"components"\s*:\s*\[\s*\{'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"f1Viable"\s*:\s*(true|false)'
-      - type: file-matches
+          path: "**/.copilot-azure/sessions/**/deploy-checklist.md"
+      - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/context.json"
-          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
-      - type: file-matches
+      - type: file-exists
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: "(?i)express|node"
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+      # handoff must present cleanup, identity, and recommendations
       - type: output-matches
         config:
-          pattern: "(?i)cleanup|clean up|identity|managed identity|recommend|next step|resource|deploy|plan|azure|app service|readiness|proceed"
-      - type: output-not-matches
+          pattern: "(?i)az group delete|clean up|remove the resource|delete the resource|tear down"
+      - type: output-matches
         config:
-          pattern: "(?i)fatal error|unhandled exception|stack trace"
+          pattern: "(?i)deployed by|signed in as|managed identity|service principal|subscription"
+      - type: output-matches
+        config:
+          pattern: "(?i)next step|recommend|consider|post-deploy|you should|suggestion"
       - type: tool-calls
         config:
           disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)azd\\s+(up|provision|deploy)\\b"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # ── deploy/integration-safety.test.ts ──────────────────────────────
   # test: generated Bicep includes app-onboard-skill tag
+  # Faithful to Jest: 5-turn followUp; earlyTerminate after scaffold (scaffold-manifest /
+  # .bicep written, or a deploy command starts). Checks the app-onboard-skill Bicep tag.
+  # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy Safety - Bicep Skill Tag"
     prompt: "I have an app in GitHub — can you deploy it to Azure for me?"
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"scaffold-manifest\\.json"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+deployment\\s+(sub|group)\\s+create|terraform\\s+apply"}]'
     environment:
       commands:
         - git init -q
@@ -561,71 +552,44 @@ stimuli:
         - git fetch -q --depth 1 origin master
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/readiness-report.md"
+      # generated Bicep must carry the app-onboard-skill tag
       - type: file-matches
         config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"components"\s*:\s*\[\s*\{'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"f1Viable"\s*:\s*(true|false)'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/context.json"
-          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: "(?i)docker|static|html"
-      - type: output-matches
-        config:
-          pattern: "(?i)bicep|tag|infra|resource|app service|static web|deploy|scaffold|plan|architect|azure|host|container"
-      - type: output-not-matches
-        config:
-          pattern: "(?i)az group create|az webapp create"
-      - type: output-not-matches
-        config:
-          pattern: "(?i)fatal error|unhandled exception|stack trace"
+          path: "**/infra/**/*.bicep"
+          pattern: "app-onboard-skill"
       - type: tool-calls
         config:
           disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)azd\\s+(up|provision|deploy)\\b"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # ── deploy/integration.test.ts ─────────────────────────────────────
   # test: error classification routes back to scaffold fix
+  # Faithful to Jest: drives to deploy, then injects an InvalidTemplate (bad API version)
+  # failure via followUp; earlyTerminate once the agent proposes a valid API version.
+  # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy - Error Classification Routes To Scaffold Fix"
     prompt: "I have a prototype ready — help me get it to production on Azure."
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes, proceed."
+        - "The deployment failed: InvalidTemplate — API version '2024-99-01' for resource type 'Microsoft.Web/serverfarms' is not supported. Please fix it."
+        - "Yes, go ahead."
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"20\\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])"}]'
     environment:
       commands:
         - git init -q
@@ -633,67 +597,40 @@ stimuli:
         - git fetch -q --depth 1 origin main
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/readiness-report.md"
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"components"\s*:\s*\[\s*\{'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"f1Viable"\s*:\s*(true|false)'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/context.json"
-          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: "(?i)express|node"
+      # identifies the bad API version / InvalidTemplate error
       - type: output-matches
         config:
-          pattern: "(?i)deploy|error|classif|scaffold|fix|infra|plan"
+          pattern: "(?i)api version|2024-99-01|invalidtemplate|not supported"
+      # proposes a valid (well-formed) API version
+      - type: output-matches
+        config:
+          pattern: "20\\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])"
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
 
   # test: no imperative CLI fallback on auth error
+  # Faithful to Jest: drives toward deploy on an env-blocked repo; earlyTerminate once
+  # deploy output is produced. Bans imperative az-create + graph scope fallbacks.
+  # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy Safety - No Imperative CLI Fallback"
     prompt: "I built a side project and want to get it live on Azure"
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes, proceed."
+        - "Yes."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+deployment\\s+(sub|group)\\s+create"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"deploy-result\\.json"}]'
     environment:
       commands:
         - git init -q
@@ -701,46 +638,45 @@ stimuli:
         - git fetch -q --depth 1 origin main
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
+      # classifies env-blocking / conditional-access and offers a safe (Bicep) path
       - type: output-matches
         config:
-          pattern: "(?i)environment|blocking|policy|conditional access|authenticat|alternative|access|safe|deploy|plan|approv|infrastructure|bicep|resource"
-      - type: output-not-matches
+          pattern: "(?i)environment|blocking|policy|conditional access|authenticat|alternative|safe|bicep|infrastructure"
+      # no imperative resource creation
+      - type: tool-calls
         config:
-          pattern: "(?i)az group create|az appservice plan create|az webapp create"
+          disallowed:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+(group|webapp|appservice)\\s+create|az\\s+appservice\\s+plan\\s+create"
+      # no graph scope fallback
       - type: output-not-matches
         config:
           pattern: '(?i)graph\.microsoft\.com'
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
 
   # test: region change requires re-approval
+  # Faithful to Jest: after a region change the agent must re-request approval;
+  # earlyTerminate once it asks for re-approval. NO `completed` grader.
   - name: "Deploy Governance - Reapproval On Region Change"
-    turns:
-      - "Can you walk me through getting my first app on Azure?"
-      - "Continue — complete the readiness assessment."
-      - "Before we wrap up, give me a short recap: the languages/frameworks and Azure services you detected, the main components and their dependencies, the overall readiness verdict, and the recommended next steps to deploy."
+    prompt: "Can you walk me through getting my first app on Azure?"
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes, proceed with the plan."
+        - "Actually, change the region — deploy to West US 2 instead."
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)approve|would you like to proceed|ready to deploy|confirm.*(region|plan)|updated plan"}]'
     environment:
       commands:
         - git init -q
@@ -748,70 +684,40 @@ stimuli:
         - git fetch -q --depth 1 origin master
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/readiness-report.md"
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"components"\s*:\s*\[\s*\{'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: '"f1Viable"\s*:\s*(true|false)'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/context.json"
-          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-          pattern: "(?i)express|node"
+      # offers/acknowledges an alternative region or SKU
       - type: output-matches
         config:
-          pattern: "(?i)azure|app|deploy|plan"
+          pattern: "(?i)west us 2|westus2|eastus2|region|sku|tier|\\bb1\\b|\\bs1\\b|\\bp1\\b"
+      # asks for re-approval after the region change
       - type: output-matches
         config:
-          pattern: "(?i)approv|confirm|proceed|region|plan|deploy"
+          pattern: "(?i)approv|confirm|proceed|updated plan|ready to deploy|would you like"
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
 
   # test: zip creation with correct directory structure
+  # Faithful to Jest: earlyTerminate when a zip/compress/publish command appears.
+  # Bans the Compress-Archive misuse that flattens the directory structure.
+  # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy - Zip Creation Directory Structure"
     prompt: "I'm new to Azure. Can you get my existing app running without me setting up infrastructure?"
     tags:
       type: integration
       tier: full
+      cost: llm+execute
       area: deployment
       skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes, proceed."
+        - "Yes."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"Compress-Archive|zip\\s+-r|az\\s+webapp\\s+deploy"}]'
     environment:
       commands:
         - git init -q
@@ -819,28 +725,20 @@ stimuli:
         - git fetch -q --depth 1 origin main
         - git checkout -q FETCH_HEAD -- .
     constraints:
-      max_turns: 8
+      max_turns: 100
     graders:
-      - type: tool-calls
-        config:
-          disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\bazd\\s+(up|provision|deploy)\\b"
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      - type: output-matches
-        config:
-          pattern: "(?i)zip|package|artifact|deploy|directory|structure"
-      - type: output-not-matches
-        config:
-          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      # must NOT flatten the directory structure via Compress-Archive .FullName
       - type: tool-calls
         config:
           disallowed:
-            - name: "^(bash|powershell|pwsh)$"
-              command: "\\baz\\s+(group|webapp|appservice|containerapp)\\s+create\\b"
-      - type: completed
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)compress-archive.*fullname|\\$files\\.fullname"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # ── integration-catalog.test.ts ────────────────────────────────────
   # test: e2e — bya-simple-web-app
@@ -849,6 +747,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: deployment
       skill: azure-app-onboard
     environment:
@@ -916,6 +815,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -954,6 +854,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1016,6 +917,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1075,6 +977,7 @@ stimuli:
     tags:
       type: integration
       tier: smoke
+      cost: llm
       area: routing
       skill: azure-app-onboard
     constraints:
@@ -1090,6 +993,7 @@ stimuli:
     tags:
       type: integration
       tier: smoke
+      cost: llm
       area: routing
       skill: azure-app-onboard
     constraints:
@@ -1105,6 +1009,7 @@ stimuli:
     tags:
       type: integration
       tier: smoke
+      cost: llm
       area: routing
       skill: azure-app-onboard
     constraints:
@@ -1120,6 +1025,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     constraints:
@@ -1149,6 +1055,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1181,6 +1088,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1212,6 +1120,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1248,6 +1157,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1306,6 +1216,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     constraints:
@@ -1331,6 +1242,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     constraints:
@@ -1354,6 +1266,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1390,6 +1303,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1425,6 +1339,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1453,6 +1368,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1514,6 +1430,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1580,6 +1497,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: routing
       skill: azure-app-onboard
     environment:
@@ -1603,6 +1521,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1661,6 +1580,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1721,6 +1641,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1784,6 +1705,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: routing
       skill: azure-app-onboard
     constraints:
@@ -1806,6 +1728,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: routing
       skill: azure-app-onboard
       # Multi-turn drive so the agent gathers app context and delegates to prepare for the
@@ -1834,6 +1757,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1872,6 +1796,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1910,6 +1835,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -1952,6 +1878,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
@@ -2014,6 +1941,7 @@ stimuli:
     tags:
       type: integration
       tier: full
+      cost: llm
       area: output
       skill: azure-app-onboard
     environment:
