@@ -69,7 +69,7 @@ stimuli:
         - "Yes."
         - "Yes."
         - "Yes."
-      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+acr\\s+build"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+deployment\\s+(sub|group)\\s+create"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"terraform\\s+(apply|init)"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file","argsPattern":"deploy-result\\.json"}]'
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+acr\\s+build"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"terraform\\s+(apply|init)"}]'
     environment:
       commands:
         - git init -q
@@ -133,7 +133,7 @@ stimuli:
         - "Yes."
         - "Yes."
         - "Yes."
-      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"deployment-summary\\.md"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"status\"\\s*:\\s*\"(succeeded|failed)\""}]'
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"path\":\"[^\"]*deployment-summary\\.md\""},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"status\"\\s*:\\s*\"(succeeded|failed)\""}]'
     environment:
       commands:
         - git init -q
@@ -481,7 +481,7 @@ stimuli:
         - "Yes."
         - "Yes."
         - "Yes."
-      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"deployment-summary\\.md"}]'
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"path\":\"[^\"]*deployment-summary\\.md\""}]'
     environment:
       commands:
         - git init -q
@@ -544,7 +544,7 @@ stimuli:
         - "Yes."
         - "Yes."
         - "Yes."
-      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"scaffold-manifest\\.json"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+deployment\\s+(sub|group)\\s+create|terraform\\s+apply"}]'
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"path\":\"[^\"]*scaffold-manifest\\.json\""},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"path\":\"[^\"]*\\.bicep\""},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+deployment\\s+(sub|group)\\s+create|terraform\\s+apply"}]'
     environment:
       commands:
         - git init -q
@@ -573,9 +573,9 @@ stimuli:
 
   # ── deploy/integration.test.ts ─────────────────────────────────────
   # test: error classification routes back to scaffold fix
-  # Faithful to Jest: drives to deploy, then injects an InvalidTemplate (bad API version)
-  # failure via followUp; earlyTerminate once the agent proposes a valid API version.
-  # NO `completed` grader — earlyTerminate is used.
+  # Faithful to Jest: seeds a broken Bicep (invalid API version 2024-99-01) in infra/,
+  # drives to deploy with the JS 6-turn followUp; earlyTerminate once the agent proposes
+  # a valid API version. NO `completed` grader — earlyTerminate is used.
   - name: "Deploy - Error Classification Routes To Scaffold Fix"
     prompt: "I have a prototype ready — help me get it to production on Azure."
     tags:
@@ -587,8 +587,10 @@ stimuli:
       followUp:
         - "Just go with defaults using my current subscription."
         - "Yes, proceed."
-        - "The deployment failed: InvalidTemplate — API version '2024-99-01' for resource type 'Microsoft.Web/serverfarms' is not supported. Please fix it."
         - "Yes, go ahead."
+        - "Yes, continue."
+        - "Yes."
+        - "Yes."
       earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"20\\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])"}]'
     environment:
       commands:
@@ -596,6 +598,21 @@ stimuli:
         - git remote add origin https://github.com/samcdonald-ms/bya-simple-web-app
         - git fetch -q --depth 1 origin main
         - git checkout -q FETCH_HEAD -- .
+        - |
+          mkdir -p infra
+          cat > infra/main.bicep <<'BICEP'
+          targetScope = 'resourceGroup'
+          param location string = resourceGroup().location
+          resource appServicePlan 'Microsoft.Web/serverfarms@2024-99-01' = {
+            name: 'bya-plan'
+            location: location
+            sku: {
+              name: 'F1'
+              tier: 'Free'
+            }
+            kind: 'linux'
+          }
+          BICEP
     constraints:
       max_turns: 100
     graders:
@@ -628,9 +645,11 @@ stimuli:
       skill: azure-app-onboard
       followUp:
         - "Just go with defaults using my current subscription."
-        - "Yes, proceed."
         - "Yes."
-      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+deployment\\s+(sub|group)\\s+create"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"deploy-result\\.json"}]'
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+deployment\\s+(sub|group)\\s+create"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"path\":\"[^\"]*deploy-result\\.json\""}]'
     environment:
       commands:
         - git init -q
@@ -662,8 +681,8 @@ stimuli:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # test: region change requires re-approval
-  # Faithful to Jest: after a region change the agent must re-request approval;
-  # earlyTerminate once it asks for re-approval. NO `completed` grader.
+  # Faithful to Jest: JS 5-turn followUp (defaults + 4×Yes); the agent must present an
+  # approval gate. earlyTerminate once it asks for approval. NO `completed` grader.
   - name: "Deploy Governance - Reapproval On Region Change"
     prompt: "Can you walk me through getting my first app on Azure?"
     tags:
@@ -674,8 +693,10 @@ stimuli:
       skill: azure-app-onboard
       followUp:
         - "Just go with defaults using my current subscription."
-        - "Yes, proceed with the plan."
-        - "Actually, change the region — deploy to West US 2 instead."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
       earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)approve|would you like to proceed|ready to deploy|confirm.*(region|plan)|updated plan"}]'
     environment:
       commands:
@@ -715,9 +736,12 @@ stimuli:
       skill: azure-app-onboard
       followUp:
         - "Just go with defaults using my current subscription."
-        - "Yes, proceed."
         - "Yes."
-      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"Compress-Archive|zip\\s+-r|az\\s+webapp\\s+deploy"}]'
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"Compress-Archive|System\\.IO\\.Compression|zip|az\\s+webapp\\s+deploy|az\\s+webapp.*publish"}]'
     environment:
       commands:
         - git init -q
