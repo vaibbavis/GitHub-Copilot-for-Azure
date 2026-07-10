@@ -101,7 +101,7 @@ export class JavaUpgradeFileContentGrader implements Grader {
   metadata: GraderMetadata = {
     name: "java-upgrade-file-content",
     description: "Checks whether workspace files satisfy content rules (regex match/not-match with optional comment stripping)",
-    behavior: { requiresLlmClient: false, requiresWorkspace: true },
+    behavior: { execution: "single", requiresLlmClient: false, requiresWorkspace: true },
     costProfile: "free",
     reference: "reference-free",
     temporalScope: "trajectory-level",

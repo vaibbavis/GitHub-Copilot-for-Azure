@@ -6,6 +6,22 @@ import type { AgentMetadata } from "../utils/agent-runner.ts";
 import { isSkillInvoked, getToolCalls, getAllAssistantMessages, argsString } from "../utils/evaluate.ts";
 
 /**
+ * Build a RegExp from a pattern that may carry a `(?i)` inline flag.
+ * JavaScript's RegExp does not support inline flags, so `new RegExp("(?i)...")`
+ * throws "Invalid group". This strips any `(?i)` occurrences and applies the
+ * `i` flag instead, matching how Vally's graders handle `(?i)` patterns.
+ */
+function toRegExp(pattern: string): RegExp {
+  let flags = "";
+  let source = pattern;
+  if (/\(\?i\)/.test(source)) {
+    flags = "i";
+    source = source.replace(/\(\?i\)/g, "");
+  }
+  return new RegExp(source, flags);
+}
+
+/**
  * When any of the early termination condition is satisfied,
  * the custom executor will terminate the agent and hand over
  * the trajectory to the graders.
@@ -112,14 +128,14 @@ export function getEarlyTerminateCondition(tags: Record<string, string[] | strin
               return true;
             }
           } else if (condition.type === "assistant-message-match") {
-            const contentPattern = new RegExp(condition.contentPattern);
+            const contentPattern = toRegExp(condition.contentPattern);
             if (contentPattern.test(getAllAssistantMessages(agentMetadata))) {
               agentMetadata.testComments.push(`Early terminate due to assistant message matching pattern: ${condition.contentPattern}`);
               return true;
             }
           } else if (condition.type === "tool-call-match") {
-            const toolPattern = new RegExp(condition.toolPattern);
-            const argsPattern = new RegExp(condition.argsPattern);
+            const toolPattern = toRegExp(condition.toolPattern);
+            const argsPattern = toRegExp(condition.argsPattern);
             const matched = getToolCalls(agentMetadata).some((event) => {
               return toolPattern.test(event.data.toolName)
                 && argsPattern.test(argsString(event));
@@ -129,8 +145,8 @@ export function getEarlyTerminateCondition(tags: Record<string, string[] | strin
               return true;
             }
           } else if (condition.type === "tool-call-result") {
-            const toolPattern = new RegExp(condition.toolPattern);
-            const argsPattern = condition.argsPattern ? new RegExp(condition.argsPattern) : undefined;
+            const toolPattern = toRegExp(condition.toolPattern);
+            const argsPattern = condition.argsPattern ? toRegExp(condition.argsPattern) : undefined;
             const completedIds = new Set(
               agentMetadata.events
                 .filter((event) => event.type === "tool.execution_complete")

@@ -69,7 +69,7 @@ stimuli:
         - "Yes."
         - "Yes."
         - "Yes."
-      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+acr\\s+build"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"terraform\\s+(apply|init)"}]'
+      earlyTerminate: '[{"type":"tool-call-result","toolPattern":"bash|powershell","argsPattern":"az\\s+acr\\s+build(?![^\"]*\\|\\s*(started|succeeded|failed))"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"terraform\\s+(apply|init)"}]'
     environment:
       commands:
         - git init -q
@@ -96,7 +96,7 @@ stimuli:
         config:
           required:
             - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+acr\\s+build|docker\\s+(build|push)"
+              command: "(?i)az\\s+acr\\s+build(?![^\"]*\\|\\s*(started|succeeded|failed))|docker\\s+(build|push)"
           disallowed:
             - name: "(?i)^(bash|powershell|pwsh)$"
               command: "(?i)terraform\\s+(init|plan|apply)"
@@ -222,7 +222,7 @@ stimuli:
         - "Yes."
         - "Yes."
         - "Yes."
-      earlyTerminate: '[{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+acr\\s+build"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"az\\s+deployment\\s+(sub|group)\\s+create"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"terraform\\s+(apply|init)"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"status\"\\s*:\\s*\"(succeeded|failed)\""}]'
+      earlyTerminate: '[{"type":"tool-call-result","toolPattern":"bash|powershell","argsPattern":"az\\s+acr\\s+build(?![^\"]*\\|\\s*(started|succeeded|failed))"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"terraform\\s+(apply|init)"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\"status\"\\s*:\\s*\"(succeeded|failed)\""}]'
     environment:
       commands:
         - git init -q
@@ -265,7 +265,7 @@ stimuli:
         config:
           required:
             - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+acr\\s+build|docker\\s+(build|push)"
+              command: "(?i)az\\s+acr\\s+build(?![^\"]*\\|\\s*(started|succeeded|failed))|docker\\s+(build|push)"
           disallowed:
             - name: "(?i)^(bash|powershell|pwsh)$"
               command: "(?i)azd\\s+(up|provision|deploy)\\b"

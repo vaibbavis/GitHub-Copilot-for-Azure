@@ -79,7 +79,7 @@ export class JsonGrader implements Grader {
   metadata: GraderMetadata = {
     name: "json-object-rules",
     description: "Checks whether a JSON file satisfies the given rules",
-    behavior: { requiresLlmClient: false, requiresWorkspace: true },
+    behavior: { execution: "single", requiresLlmClient: false, requiresWorkspace: true },
     costProfile: "free",
     reference: "reference-free",
     temporalScope: "trajectory-level",
