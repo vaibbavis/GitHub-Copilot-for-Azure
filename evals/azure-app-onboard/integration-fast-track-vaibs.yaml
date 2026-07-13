@@ -1,0 +1,197 @@
+  # ── integration-fast-track.test.ts ─────────────────────────────────
+  # test: e2e — simple HTML site deploys to free tier (Azure-Samples/app-service-web-html-get-started)
+  # No `earlyTerminate` — runs to natural completion (matches python-appservice-deploy Flask e2e pattern).
+  # Rationale: earlyTerminate substring-match on tool args is unsafe — false-positives on scaffold
+  # content (heredoc text, deploy-checklist.md content). Post-run tool-calls grader validates that
+  # `az webapp deploy` or `az staticwebapp create` was actually invoked.
+  # NOTE: no `completed` grader either — tool-calls grader is the pass criterion.
+  - name: "Fast Track - HTML Site Free Tier"
+    prompt: "I have an app in GitHub — can you deploy it to Azure for me?"
+    environment:
+      commands:
+        - git init -q
+        - git remote add origin https://github.com/Azure-Samples/app-service-web-html-get-started
+        - git fetch -q --depth 1 origin master
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 200
+    tags:
+      type: integration
+      tier: full
+      cost: azure
+      area: e2e-deployment
+      debug: fasttrack-html
+      skill: azure-app-onboard
+      systemPrompt: '{"mode":"append","content":"Use a pseudo-random resource group name (suffix with random characters) to avoid collisions with existing resource groups."}'
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+    graders:
+      # azure-app-onboard MUST be invoked
+      - type: skill-invocation
+        config:
+          required:
+            - azure-app-onboard
+      # HTML/static-site language MUST appear in output
+      - type: output-matches
+        config:
+          pattern: "(?i)static|html"
+      # Free tier / F1 SKU signal MUST appear
+      - type: output-matches
+        config:
+          pattern: "(?i)free tier|f1|free|\\$0|static web"
+      # App Service deploy MUST have been executed — vally's tool-calls grader
+      # is shell-tokenized (verified on the wetty run), so the substring
+      # false-positive on bash heredocs does not apply here.
+      # Accept any of the valid deploy invocation paths:
+      #   • `az webapp deploy` — App Service F1 (Round 4 path: zip deploy)
+      #   • `az staticwebapp create` — direct SWA CLI creation
+      #   • `az deployment sub create` — Bicep subscription-scope deploy (Round 5 path: SWA via Bicep template)
+      - type: tool-calls
+        config:
+          required:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+webapp\\s+deploy\\b|az\\s+staticwebapp\\s+create\\b|az\\s+deployment\\s+(sub|group)\\s+create\\b"
+          disallowed:
+            # Bicep is the default IaC — no Terraform
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)terraform\\s+(init|plan|apply)"
+            # No azd fallback — this stimulus tests az CLI path
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)azd\\s+(up|provision|deploy)\\b"
+            # No imperative resource create — flow uses IaC
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)\\baz\\s+(group|webapp|appservice)\\s+create\\b"
+            # Deprecated `az webapp up` — negative lookahead excludes `az webapp update`
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)\\baz\\s+webapp\\s+up(?!date)\\b"
+      # Agent MUST NOT hand back manual "Next Steps" instead of executing
+      - type: output-not-matches
+        config:
+          pattern: "(?i)next steps.{0,100}(az webapp deploy|zip.*deploy|deploy your code)"
+      # Bicep is default IaC
+      - type: output-not-matches
+        config:
+          pattern: "(?i)terraform\\s+(init|plan|apply)|hashicorp/azurerm"
+      # Fast-track: static site → no stack/DB/auth questions
+      - type: output-not-matches
+        config:
+          pattern: "(?i)what (stack|language|framework|database|auth).*\\?"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      # Prereq artifacts MUST be written
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/readiness-report.md"
+      # Prereq output schema shape
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+          pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+          pattern: '"components"\s*:\s*\[\s*\{'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/readiness-report.md"
+          pattern: '(?is)(?=.*\bbuild\b)(?=.*\bcompleteness\b)(?=.*\bdeployability\b)(?=.*\b(PASS|WARN|FAIL|SKIPPED)\b)'
+      # F1-viable static site expected
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+          pattern: '"f1Viable"\s*:\s*true'
+      # Framework detection: HTML/static
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+          pattern: "(?i)html|static"
+
+      # ── PHASE COMPLETION: all 4 phases must be recorded in context.json ─────
+      # Context MUST list "deploy" in completedPhases (stronger than "prereq" — deploy
+      # can only be reached after prereq+prepare+scaffold, so this subsumes those checks).
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/context.json"
+          pattern: '"completedPhases"\s*:\s*\[[^\]]*"deploy"'
+      # After deploy finalizes, currentPhase MUST be null (per deploy/SKILL.md Step 8).
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/context.json"
+          pattern: '"currentPhase"\s*:\s*null'
+
+      # ── PHASE ARTIFACTS: every phase must have produced its output file ─────
+      # (Matches Jest `assertPhaseArtifactsExist` for full-pipeline stimuli.)
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/scaffold-manifest.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-checklist.md"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+
+      # ── DEPLOY-RESULT SCHEMA: real deploy vs skeleton placeholder ──────────
+      # (Matches Jest `assertDeployResultSchema` — required fields, enum values.)
+      # status MUST be "succeeded" (not "in-progress" or "failed"). This is the strongest
+      # single assertion that the deploy actually completed successfully end-to-end.
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"status"\s*:\s*"succeeded"'
+      # resourceGroupName MUST be populated (rules out empty-string placeholder).
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"resourceGroupName"\s*:\s*"[a-z][a-z0-9\-_]{2,}"'
+      # sessionId MUST be present (schema-required field per deploy-schemas.ts).
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"sessionId"\s*:\s*"[0-9a-f\-]{36}"'
+      # healthStatus MUST be one of the DeployResult enum values from deploy-schemas.ts.
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"healthStatus"\s*:\s*"(healthy|degraded|unreachable|unknown)"'
+      # endpoints array MUST be present (populated for successful deploys).
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"endpoints"\s*:\s*\['
+      # deploymentNames array MUST be present (initial + any healing retries).
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"deploymentNames"\s*:\s*\['
+
+      # ── FAST-TRACK AUTO-CHEAPEST: prepare-plan MUST pick F1 or Static Web Apps Free ──
+      # Validates the Fix C skill edit (prepare/references/sku-matrix.md § Auto-Cheapest).
+      # Cheapest App Service SKU is F1 ($0); cheapest static hosting is Static Web Apps Free.
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+          pattern: '(?i)"sku"\s*:\s*"F1(\s+\(Free\))?"|Microsoft\.Web/staticSites|static\s*web\s*apps?.*free'
+
+      # ── LIVE ENDPOINT SURFACED: proof of real deploy output to user ────────
+      # (Matches Jest `hasEndpoint` check for the deployed URL — this cannot pass
+      # without an actual deployment succeeding and returning an endpoint.)
+      - type: output-matches
+        config:
+          pattern: "azurewebsites\\.net|azurestaticapps\\.net|azurecontainerapps\\.io"

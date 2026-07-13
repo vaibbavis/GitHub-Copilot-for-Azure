@@ -50,6 +50,10 @@
       followUp:
         - "Just go with defaults using my current subscription."
         - "What do you recommend, and what will the plan cost?"
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
       earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-result","toolPattern":"create|create_file|write_file","argsPattern":"prepare-plan|scaffold-manifest"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
     constraints:
       max_turns: 60
@@ -79,6 +83,11 @@
       skill: azure-app-onboard
       followUp:
         - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
         - "Yes."
         - "Yes."
         - "Yes."
@@ -149,6 +158,11 @@
         - "Yes."
         - "Yes."
         - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
       earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep|\\.tf\\b"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
     environment:
       commands:
@@ -213,6 +227,10 @@
         - "Yes."
         - "Yes."
         - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
       earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep|\\.tf\\b"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
     environment:
       commands:
@@ -245,7 +263,7 @@
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # ── prepare/integration-service-mapping.test.ts ────────────────────
-  # test: e2e — golang-clean-web-api (Go/Gin + PostgreSQL + Redis + Elasticsearch)
+  # test: golang-clean-web-api (Go/Gin + PostgreSQL + Redis + Elasticsearch)
   # earlyTerminate: plan-presented (shouldEarlyTerminateForPlanPresented).
   - name: "Service Mapping - Go Gin Multi-Service"
     prompt: "I built a side project and want to get it live on Azure"
@@ -258,6 +276,10 @@
       skill: azure-app-onboard
       followUp:
         - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
         - "Yes."
         - "Yes."
         - "Yes."
@@ -279,10 +301,15 @@
       - type: output-matches
         config:
           pattern: "(?i)\\bgo\\b|\\bgin\\b|golang"
-      # Jest: docker-compose detected
-      - type: output-matches
+      # docker-compose detected (Jest assertDockerComposeDetected — messages OR tool args).
+      # The agent detects it by READING the compose file, not by verbalizing it, so we match
+      # the file read (tool `path` arg) rather than assistant output.
+      - type: tool-calls
         config:
-          pattern: "(?i)docker-compose|docker compose|compose\\.y"
+          required:
+            - name: "(?i)^(view|read_file|cat|glob)$"
+              args:
+                path: "(?i)docker-compose|compose\\.ya?ml"
       # framework detection persisted to prereq-output.json
       - type: file-matches
         config:
@@ -295,7 +322,7 @@
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # test: e2e — aws-bookstore-demo routes to azure-cloud-migrate after prereq
+  # test: aws-bookstore-demo routes to azure-cloud-migrate after prereq
   # earlyTerminate: route-to-migrate (custom — skill-call azure-cloud-migrate / context routeToSkill).
   # NOTE: executor auto-loads all plugin skills, so azure-cloud-migrate is available.
   - name: "Migration Routing - AWS Workload To Cloud Migrate"
@@ -310,6 +337,12 @@
       followUp:
         - "Just go with defaults using my current subscription."
         - "Redirect to Azure Cloud Migrate"
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
         - "Yes."
         - "Yes."
         - "Yes."
@@ -331,7 +364,7 @@
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # test: e2e — wetty (docker-compose + WebSocket routing)
+  # test: wetty (docker-compose + WebSocket routing)
   # earlyTerminate: plan-presented.
   - name: "Service Mapping - Wetty Docker Compose WebSocket"
     prompt: "I want to take my local app and put it in the cloud — where do I start?"
@@ -344,6 +377,11 @@
       skill: azure-app-onboard
       followUp:
         - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
         - "Yes."
         - "Yes."
         - "Yes."
@@ -380,7 +418,7 @@
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # test: e2e — yamtrack-django (docker-compose + PostgreSQL + Redis PaaS mapping)
+  # test: yamtrack-django (docker-compose + PostgreSQL + Redis PaaS mapping)
   # earlyTerminate: plan-presented.
   - name: "Service Mapping - Yamtrack Django Compose"
     prompt: "Can you analyze my app and tell me which Azure service I should use?"
@@ -393,6 +431,12 @@
       skill: azure-app-onboard
       followUp:
         - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
         - "Yes."
         - "Yes."
         - "Yes."
@@ -410,10 +454,14 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest: docker-compose detected
-      - type: output-matches
+      # docker-compose detected (Jest assertDockerComposeDetected — messages OR tool args);
+      # match the compose file read (tool `path` arg) rather than assistant output.
+      - type: tool-calls
         config:
-          pattern: "(?i)docker-compose|docker compose|compose\\.y"
+          required:
+            - name: "(?i)^(view|read_file|cat|glob)$"
+              args:
+                path: "(?i)docker-compose|compose\\.ya?ml"
       # Jest HARD: PostgreSQL → Azure Database for PostgreSQL
       - type: output-matches
         config:
@@ -434,7 +482,7 @@
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # test: e2e — postgresql-event-sourcing (Kafka → Event Hubs + Gradle/Spring Boot)
+  # test: postgresql-event-sourcing (Kafka → Event Hubs + Gradle/Spring Boot)
   # earlyTerminate: plan-presented.
   - name: "Service Mapping - Kafka To Event Hubs Spring"
     prompt: "I just signed up for Azure. What's the fastest way to bring my app over?"
@@ -447,6 +495,11 @@
       skill: azure-app-onboard
       followUp:
         - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
         - "Yes."
         - "Yes."
         - "Yes."

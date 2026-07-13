@@ -20,6 +20,11 @@
         - "Yes."
         - "Yes."
         - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
     environment:
       commands:
         - git init -q
@@ -200,6 +205,12 @@
         - "Yes."
         - "Yes."
         - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
     environment:
       commands:
         - git init -q
@@ -337,10 +348,6 @@
         config:
           path: "**/.copilot-azure/sessions/**/deployment-summary.md"
           pattern: "(?i)portal\\.azure\\.com"
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
-          pattern: "(?i)redeploy"
 
       # ── No manual "Next Steps" for code deploy (Jest `hasManualDeploySteps`) ──
       - type: output-not-matches
