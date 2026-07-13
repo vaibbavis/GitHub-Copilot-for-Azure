@@ -1,0 +1,485 @@
+  # ── prepare/*.test.ts — prepare-phase eval (10 integration cases) ──
+  # New format (see seeded-deploy-eval.yaml + integration-fast-track-vaibs.yaml): rich
+  # file/output graders. earlyTerminate mirrors the Jest shouldEarlyTerminate* helpers —
+  # halts at the approval gate / plan-presented (prepare-plan.json written) / scaffold-or-
+  # deploy, so the run stops once the plan is presented, BEFORE any real deploy. No `completed`.
+  #   integration.test.ts (2: delegation) · integration-cost.test.ts (1) ·
+  #   integration-depth.test.ts (2) · integration-service-mapping.test.ts (5)
+
+  # ── prepare/integration.test.ts ────────────────────────────────────
+  # test: parent delegates to prepare for architecture planning prompt
+  - name: "Delegation - Architecture Planning"
+    prompt: "Can you walk me through getting my first app on Azure?"
+    tags:
+      type: integration
+      tier: full
+      cost: llm+execute
+      area: routing
+      debug: prepare-delegation-arch
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "It's a Node.js Express web API with a PostgreSQL database."
+        - "Yes, walk me through the recommended architecture and services."
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-result","toolPattern":"create|create_file|write_file","argsPattern":"prepare-plan|scaffold-manifest"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
+    constraints:
+      max_turns: 60
+    graders:
+      # delegates to prepare → azure-app-onboard invoked (Jest: invocation rate >= 0.8)
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+      # architecture / service planning content surfaced
+      - type: output-matches
+        config:
+          pattern: "(?i)app service|container apps|functions|static web apps|architecture|recommend"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # test: parent delegates to prepare for SKU selection prompt
+  - name: "Delegation - SKU Selection"
+    prompt: "I have no Azure experience but need to host my web app"
+    tags:
+      type: integration
+      tier: full
+      cost: llm+execute
+      area: routing
+      debug: prepare-delegation-sku
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "What do you recommend, and what will the plan cost?"
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-result","toolPattern":"create|create_file|write_file","argsPattern":"prepare-plan|scaffold-manifest"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
+    constraints:
+      max_turns: 60
+    graders:
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+      # SKU / tier / pricing recommendation content
+      - type: output-matches
+        config:
+          pattern: "(?i)sku|tier|plan|size|pricing|recommend|host"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # ── prepare/integration-cost.test.ts ───────────────────────────────
+  # test: cost estimation provides specific pricing — not just mentions cost
+  # earlyTerminate: approval gate (shouldEarlyTerminateForApprovalGate).
+  - name: "Cost Depth - Dollar And SKU Signals"
+    prompt: "I need to deploy this app to Azure — but first tell me exactly what it will cost"
+    tags:
+      type: integration
+      tier: full
+      cost: llm+execute
+      area: output
+      debug: prepare-cost-depth
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep|\\.tf\\b"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
+    environment:
+      commands:
+        - git init -q
+        - git remote add origin https://github.com/dev-arv13/demo-app
+        - git fetch -q --depth 1 origin main
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 80
+    graders:
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+      # Jest HARD: dollar amounts present
+      - type: output-matches
+        config:
+          pattern: "\\$\\d"
+      # Jest HARD: a specific Azure service or SKU/tier
+      - type: output-matches
+        config:
+          pattern: "(?i)container apps|app service|static web apps|azure functions|\\bF1\\b|\\bB1\\b|\\bS1\\b|free|basic|standard|tier|sku"
+      # Jest HARD: per-service breakdown → >=2 dollar amounts + a monthly qualifier
+      - type: output-matches
+        config:
+          pattern: "\\$\\d[\\s\\S]*\\$\\d"
+      - type: output-matches
+        config:
+          pattern: "(?i)per month|/month|monthly"
+      # Jest HARD: cost assumptions stated (assumes / within limits|grant / free tier)
+      - type: output-matches
+        config:
+          pattern: "(?i)assum|within[\\s\\S]{0,40}(limit|grant)|free[\\s-]?tier"
+      # prereq artifacts produced before the gate
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/readiness-report.md"
+      # prepare-plan cost estimate written
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+          pattern: '"costEstimate"\s*:'
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # ── prepare/integration-depth.test.ts ──────────────────────────────
+  # test: prepare-plan.json has valid schema for broken-todo-demo Express app
+  # earlyTerminate: approval gate. Mirrors Jest assertPreparePlanSchema.
+  - name: "Prepare Depth - Plan Schema For Express App"
+    prompt: "I built a side project and want to get it live on Azure"
+    tags:
+      type: integration
+      tier: full
+      cost: llm+execute
+      area: output
+      debug: prepare-depth-schema
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep|\\.tf\\b"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
+    environment:
+      commands:
+        - git init -q
+        - git remote add origin https://github.com/Arun07AK/broken-todo-demo
+        - git fetch -q --depth 1 origin main
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 80
+    graders:
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+      # prepare-plan.json exists
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+      # Jest assertPreparePlanSchema HARD: services[] non-empty, naming.resourcePrefix (len>=5),
+      # costEstimate, iacFormat present
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+          pattern: '"services"\s*:\s*\[\s*\{'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+          pattern: '"resourcePrefix"\s*:\s*"[A-Za-z0-9][A-Za-z0-9-]{4,}"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+          pattern: '"costEstimate"\s*:'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+          pattern: '"iacFormat"\s*:\s*"'
+      # phase progression
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/context.json"
+          pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # test: agent validates quota before recommending region
+  # earlyTerminate: approval gate.
+  - name: "Prepare Depth - Quota Validation Before Region"
+    prompt: "I want a one-click way to deploy my app to Azure."
+    tags:
+      type: integration
+      tier: full
+      cost: llm+execute
+      area: output
+      debug: prepare-depth-quota
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep|\\.tf\\b"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
+    environment:
+      commands:
+        - git init -q
+        - git remote add origin https://github.com/rwieruch/node-express-server-rest-api
+        - git fetch -q --depth 1 origin master
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 80
+    graders:
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+      # Jest HARD: quota / capacity / usage validated
+      - type: output-matches
+        config:
+          pattern: "(?i)quota|capacity|usage"
+      # Jest HARD: a specific region recommended
+      - type: output-matches
+        config:
+          pattern: "(?i)\\b(eastus2?|westus2?|centralus|northeurope|westeurope|southcentralus)\\b"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # ── prepare/integration-service-mapping.test.ts ────────────────────
+  # test: e2e — golang-clean-web-api (Go/Gin + PostgreSQL + Redis + Elasticsearch)
+  # earlyTerminate: plan-presented (shouldEarlyTerminateForPlanPresented).
+  - name: "Service Mapping - Go Gin Multi-Service"
+    prompt: "I built a side project and want to get it live on Azure"
+    tags:
+      type: integration
+      tier: full
+      cost: llm+execute
+      area: output
+      debug: prepare-map-go
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-result","toolPattern":"create|create_file|write_file","argsPattern":"prepare-plan|scaffold-manifest"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep|\\.tf\\b"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
+    environment:
+      commands:
+        - git init -q
+        - git remote add origin https://github.com/naeemaei/golang-clean-web-api
+        - git fetch -q --depth 1 origin master
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 80
+    graders:
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+      # Jest HARD: Go/Gin stack detected
+      - type: output-matches
+        config:
+          pattern: "(?i)\\bgo\\b|\\bgin\\b|golang"
+      # Jest: docker-compose detected
+      - type: output-matches
+        config:
+          pattern: "(?i)docker-compose|docker compose|compose\\.y"
+      # framework detection persisted to prereq-output.json
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+          pattern: "(?i)\\bgo\\b|gin|golang"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/readiness-report.md"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # test: e2e — aws-bookstore-demo routes to azure-cloud-migrate after prereq
+  # earlyTerminate: route-to-migrate (custom — skill-call azure-cloud-migrate / context routeToSkill).
+  # NOTE: executor auto-loads all plugin skills, so azure-cloud-migrate is available.
+  - name: "Migration Routing - AWS Workload To Cloud Migrate"
+    prompt: "We're running this app today. How do we bring it to Azure with minimal changes?"
+    tags:
+      type: integration
+      tier: full
+      cost: llm+execute
+      area: routing
+      debug: prepare-map-aws-migrate
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Redirect to Azure Cloud Migrate"
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"skill-call","skill":"azure-cloud-migrate"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"(?i)routetoskill[^}]*azure-cloud-migrate"}]'
+    environment:
+      commands:
+        - git init -q
+        - git remote add origin https://github.com/aws-samples/aws-bookstore-demo-app
+        - git fetch -q --depth 1 origin main
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 80
+    graders:
+      # Jest HARD: routed to azure-cloud-migrate
+      - type: skill-invocation
+        config:
+          required: ["azure-cloud-migrate"]
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # test: e2e — wetty (docker-compose + WebSocket routing)
+  # earlyTerminate: plan-presented.
+  - name: "Service Mapping - Wetty Docker Compose WebSocket"
+    prompt: "I want to take my local app and put it in the cloud — where do I start?"
+    tags:
+      type: integration
+      tier: full
+      cost: llm+execute
+      area: output
+      debug: prepare-map-wetty
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-result","toolPattern":"create|create_file|write_file","argsPattern":"prepare-plan|scaffold-manifest"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep|\\.tf\\b"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
+    environment:
+      commands:
+        - git init -q
+        - git remote add origin https://github.com/butlerx/wetty
+        - git fetch -q --depth 1 origin main
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 80
+    graders:
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+      # Jest: Dockerfile explored + docker-compose detected
+      - type: output-matches
+        config:
+          pattern: "(?i)dockerfile|docker-compose|docker compose|compose\\.y"
+      # WebSocket / container routing surfaced
+      - type: output-matches
+        config:
+          pattern: "(?i)docker|websocket|container"
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+          pattern: "(?i)node|typescript|docker"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/readiness-report.md"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # test: e2e — yamtrack-django (docker-compose + PostgreSQL + Redis PaaS mapping)
+  # earlyTerminate: plan-presented.
+  - name: "Service Mapping - Yamtrack Django Compose"
+    prompt: "Can you analyze my app and tell me which Azure service I should use?"
+    tags:
+      type: integration
+      tier: full
+      cost: llm+execute
+      area: output
+      debug: prepare-map-yamtrack
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-result","toolPattern":"create|create_file|write_file","argsPattern":"prepare-plan|scaffold-manifest"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep|\\.tf\\b"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
+    environment:
+      commands:
+        - git init -q
+        - git remote add origin https://github.com/FuzzyGrim/Yamtrack
+        - git fetch -q --depth 1 origin dev
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 80
+    graders:
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+      # Jest: docker-compose detected
+      - type: output-matches
+        config:
+          pattern: "(?i)docker-compose|docker compose|compose\\.y"
+      # Jest HARD: PostgreSQL → Azure Database for PostgreSQL
+      - type: output-matches
+        config:
+          pattern: "(?i)azure database for postgresql|flexible server|postgresql[\\s\\S]{0,60}azure"
+      # Jest HARD: Redis → Azure Cache for Redis
+      - type: output-matches
+        config:
+          pattern: "(?i)azure cache for redis|redis[\\s\\S]{0,60}azure"
+      # Jest HARD: workspace scan facts surfaced
+      - type: output-matches
+        config:
+          pattern: "(?i)found|detected|discovered|scan"
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+          pattern: "(?i)django|python"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # test: e2e — postgresql-event-sourcing (Kafka → Event Hubs + Gradle/Spring Boot)
+  # earlyTerminate: plan-presented.
+  - name: "Service Mapping - Kafka To Event Hubs Spring"
+    prompt: "I just signed up for Azure. What's the fastest way to bring my app over?"
+    tags:
+      type: integration
+      tier: full
+      cost: llm+execute
+      area: output
+      debug: prepare-map-kafka
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+      earlyTerminate: '[{"type":"assistant-message-match","contentPattern":"(?i)ready to proceed|ready to deploy|shall i proceed"},{"type":"tool-call-result","toolPattern":"create|create_file|write_file","argsPattern":"prepare-plan|scaffold-manifest"},{"type":"tool-call-match","toolPattern":"create|create_file|write_file|edit","argsPattern":"\\.bicep|\\.tf\\b"},{"type":"tool-call-match","toolPattern":"bash|powershell","argsPattern":"azd\\s+(up|provision)|az\\s+deployment|terraform\\s+apply"}]'
+    environment:
+      commands:
+        - git init -q
+        - git remote add origin https://github.com/eugene-khyst/postgresql-event-sourcing
+        - git fetch -q --depth 1 origin main
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 80
+    graders:
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+      # Jest HARD: Java/Gradle/Spring Boot detected
+      - type: output-matches
+        config:
+          pattern: "(?i)gradle|build\\.gradle|spring boot|spring|java"
+      # Jest HARD: Kafka → Azure Event Hubs
+      - type: output-matches
+        config:
+          pattern: "(?i)event hubs|eventhubs|kafka[\\s\\S]{0,40}protocol|kafka-compatible"
+      # Jest HARD: PostgreSQL dependency detected
+      - type: output-matches
+        config:
+          pattern: "(?i)postgres|postgresql"
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+          pattern: "(?i)java|spring|gradle"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"

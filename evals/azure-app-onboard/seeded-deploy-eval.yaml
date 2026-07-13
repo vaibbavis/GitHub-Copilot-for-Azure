@@ -3,7 +3,7 @@
   # natural completion (earlyTerminate substring-matches tool args, which aborts long deploy
   # commands like `az acr build` before the grader counts them).
   # Schema checks use file-matches (unaffected by the seeded fixture's second session dir).
-  # Fixtures: vaibbavis fork fixtures/deploy-*. Test 1 App Service · Test 2 Container Apps · Test 3 Handoff.
+  # Fixtures: vaibbavis fork fixtures/deploy-*. Test 1 App Service · Test 2 Container Apps (+ handoff).
 
   # ── Test 1: App Service deploy — safety, depth, imperative-CLI/Entra-auth, password ──
   - name: "Deploy Verify - App Service Pipeline"
@@ -312,6 +312,36 @@
         config:
           pattern: "azurecontainerapps\\.io"
 
+      # ── HANDOFF (folded in from integration-handoff.test.ts — the Jest handoff test is
+      #    App-Service-only, so this is net-new Container Apps handoff coverage. No
+      #    earlyTerminate → deploy→handoff completes and writes deployment-summary.md). ──
+      # handoff content: identity / cleanup / recommendations / redeploy (Jest assertHandoffPresented)
+      - type: output-matches
+        config:
+          pattern: "(?i)deployed by|signed in as|managed identity|service principal|subscription"
+      - type: output-matches
+        config:
+          pattern: "(?i)az group delete|clean up|remove the resource|delete the resource|tear down"
+      - type: output-matches
+        config:
+          pattern: "(?i)next step|recommend|consider|post-deploy|you should|suggestion"
+      - type: output-matches
+        config:
+          pattern: "(?i)redeploy|re-deploy|deploy again|push code"
+      # handoff artifact: deployment-summary.md contains the mandatory sections
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
+          pattern: "(?i)az group delete"
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
+          pattern: "(?i)portal\\.azure\\.com"
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
+          pattern: "(?i)redeploy"
+
       # ── No manual "Next Steps" for code deploy (Jest `hasManualDeploySteps`) ──
       - type: output-not-matches
         config:
@@ -321,122 +351,6 @@
       - type: output-not-matches
         config:
           pattern: "(?i)terraform\\s+(init|plan|apply)|hashicorp/azurerm"
-
-      - type: output-not-matches
-        config:
-          pattern: "(?i)fatal error|unhandled exception|stack trace"
-
-  # ── Test 3: Handoff — post-deploy cleanup / identity / recommendations ──
-  # Source: deploy/integration-handoff.test.ts. App Service fixture; deploy-outcome-agnostic.
-  # assertHandoffPresented = >=3 of {identity, cleanup, redeploy, recommendations}; Vally can't
-  # express "3 of 4", so all four are required (redeploy is mandatory per handoff-protocol.md).
-  - name: "Deploy Handoff - Cleanup Identity Recommendations"
-    prompt: "Use the azure-app-onboard skill to deploy my code to Azure."
-    tags:
-      type: integration
-      tier: full
-      cost: azure
-      area: deployment
-      debug: deploy-handoff-appservice
-      skill: azure-app-onboard
-      followUp:
-        - "Just go with defaults using my current subscription."
-        - "Yes."
-        - "Yes."
-        - "Yes."
-    environment:
-      commands:
-        - git init -q
-        - 'git remote add origin https://github.com/vaibbavis/GitHub-Copilot-for-Azure.git'
-        - git fetch -q --depth 1 origin fixtures/deploy-app-service
-        - git checkout -q FETCH_HEAD -- .
-    constraints:
-      max_turns: 200
-    graders:
-      # routing gate
-      - type: skill-invocation
-        config:
-          required: ["azure-app-onboard"]
-
-      # ── DEPLOY EXECUTED (handoff can only follow a real deploy) ──
-      - type: tool-calls
-        config:
-          sequence:
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az account show"
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az deployment (sub|group) create"
-      - type: tool-calls
-        config:
-          required:
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+deployment\\s+(sub|group)\\s+create\\b"
-          disallowed:
-            # no azd fallback (Jest handoff disallows azd)
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)azd\\s+(up|provision|deploy)\\b"
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)terraform\\s+(init|plan|apply)"
-
-      # ── HANDOFF CONTENT (Jest `assertHandoffPresented`) ──
-      # deploy identity surfaced
-      - type: output-matches
-        config:
-          pattern: "(?i)deployed by|signed in as|managed identity|service principal|subscription"
-      # cleanup commands provided
-      - type: output-matches
-        config:
-          pattern: "(?i)az group delete|clean up|remove the resource|delete the resource|tear down"
-      # post-deploy recommendations / next steps
-      - type: output-matches
-        config:
-          pattern: "(?i)next step|recommend|consider|post-deploy|you should|suggestion"
-      # redeploy shortcut — handoff-protocol.md marks this mandatory
-      - type: output-matches
-        config:
-          pattern: "(?i)redeploy|re-deploy|deploy again|push code"
-
-      # ── HANDOFF ARTIFACT: deployment-summary.md contains the mandatory sections
-      #    (handoff-protocol.md Step 9) — verifies the handoff was actually written ──
-      # cleanup command — "az group delete -n {rg} --yes --no-wait" (always printed)
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
-          pattern: "(?i)az group delete"
-      # deployment identity / portal link (first lines of the handoff per protocol)
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
-          pattern: "(?i)portal\\.azure\\.com"
-      # redeploy command surfaced in the summary ("Include this ... AND in deployment-summary.md")
-      - type: file-matches
-        config:
-          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
-          pattern: "(?i)redeploy"
-
-      # ── PHASE ARTIFACTS (Jest handoff: context.json, prereq-output.json, prepare-plan.json
-      #    + assertDeployChecklistExists; handoff is post-deploy so all pipeline outputs exist) ──
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/prereq-output.json"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/deploy-checklist.md"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/deploy-result.json"
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
-
-      # ── SESSION FILE (Jest `assertSessionFileCreated` + `assertPhaseArtifactsExist`) ──
-      # context.json must exist
-      - type: file-exists
-        config:
-          path: "**/.copilot-azure/sessions/**/context.json"
 
       - type: output-not-matches
         config:
