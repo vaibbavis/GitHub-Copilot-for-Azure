@@ -1,0 +1,443 @@
+  # ── deploy/integration-deploy-verification.test.ts + integration-handoff.test.ts ──
+  # Fast-track format (see integration-fast-track-vaibs.yaml): NO `earlyTerminate` — runs to
+  # natural completion (earlyTerminate substring-matches tool args, which aborts long deploy
+  # commands like `az acr build` before the grader counts them).
+  # Schema checks use file-matches (unaffected by the seeded fixture's second session dir).
+  # Fixtures: vaibbavis fork fixtures/deploy-*. Test 1 App Service · Test 2 Container Apps · Test 3 Handoff.
+
+  # ── Test 1: App Service deploy — safety, depth, imperative-CLI/Entra-auth, password ──
+  - name: "Deploy Verify - App Service Pipeline"
+    prompt: "Use the azure-app-onboard skill to deploy my code to Azure."
+    tags:
+      type: integration
+      tier: full
+      cost: azure
+      area: deployment
+      debug: deploy-verify-appservice
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+    environment:
+      commands:
+        - git init -q
+        - 'git remote add origin https://github.com/vaibbavis/GitHub-Copilot-for-Azure.git'
+        - git fetch -q --depth 1 origin fixtures/deploy-app-service
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 200
+    graders:
+      # routing gate — azure-app-onboard MUST be invoked
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+
+      # ── PREFLIGHT ORDERING: az account show (auth) BEFORE az deployment ──
+      # (Matches Jest `assertPreflightBeforeDeployment`.)
+      - type: tool-calls
+        config:
+          sequence:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az account show"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az deployment (sub|group) create"
+
+      # ── DEPLOY EXECUTED via Bicep IaC, not imperative/azd ──
+      # (Matches Jest imperative-CLI ban + no-azd + Entra-only config-zip ban.)
+      - type: tool-calls
+        config:
+          required:
+            # what-if preview MUST run before deploy (Jest `assertPreflightBeforeDeployment`)
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+deployment\\s+(sub|group)\\b[^\"]*what-if"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+deployment\\s+(sub|group)\\s+create\\b"
+          disallowed:
+            # no azd fallback
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)azd\\s+(up|provision|deploy)\\b"
+            # Bicep is the default IaC — no Terraform
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)terraform\\s+(init|plan|apply)"
+            # no imperative resource mutation (edit Bicep + redeploy instead)
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+(webapp|functionapp)\\s+update"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+appservice\\s+plan\\s+update"
+            # no config-zip (requires SCM basic auth; Entra-only)
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)config-zip"
+
+      # ── SCM basic-auth lifecycle (approximates Jest `assertScmBasicAuthDisabled`) ──
+      - type: tool-calls
+        config:
+          required:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)basicpublishingcredentialspolicies"
+
+      # ── PORTAL LINK surfaced to the user (Jest `assertPortalLinkGenerated`) ──
+      - type: output-matches
+        config:
+          pattern: "(?i)portal\\.azure\\.com"
+
+      # ── LIVE ENDPOINT surfaced — proof of a real App Service deploy ──
+      - type: output-matches
+        config:
+          pattern: "azurewebsites\\.net"
+
+      # ── BICEP TAG retained through deploy (Jest `assertBicepTagPresent`) ──
+      - type: file-matches
+        config:
+          path: "**/infra/**/*.bicep"
+          pattern: "app-onboard-skill"
+
+      # ── PHASE ARTIFACTS: every phase produced its output (Jest `assertPhaseArtifactsExist`) ──
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/scaffold-manifest.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-checklist.md"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
+
+      # ── NO azure.yaml — AppOnboard never generates it (Jest `generatedAzureYaml`) ──
+      - type: file-not-exists
+        config:
+          path: "**/azure.yaml"
+
+      # ── CONTEXT progression: deploy completed, currentPhase null (Jest `assertContextJsonProgression`) ──
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/context.json"
+          pattern: '"completedPhases"\s*:\s*\[[^\]]*"deploy"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/context.json"
+          pattern: '"currentPhase"\s*:\s*null'
+
+      # ── DEPLOY-RESULT SCHEMA: real deploy vs skeleton (Jest `assertDeployResultSchema`) ──
+      # Jest HARD-requires: status, subscriptionId, resourceGroupName, sessionId.
+      # status MUST be "succeeded" — strongest single proof the deploy completed e2e.
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"status"\s*:\s*"succeeded"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"subscriptionId"\s*:\s*"[0-9a-f\-]{36}"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"resourceGroupName"\s*:\s*"[a-z][a-z0-9\-_]{2,}"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"sessionId"\s*:\s*"[0-9a-f\-]{36}"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"healthStatus"\s*:\s*"(healthy|degraded|unreachable|unknown)"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"endpoints"\s*:\s*\['
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"deploymentNames"\s*:\s*\['
+
+      # ── PASSWORD SAFETY: never ask the user for a password (Jest `assertNoPasswordPrompts`) ──
+      - type: output-not-matches
+        config:
+          pattern: "(?i)(enter|provide|type|input)[^.\\n]{0,20}(password|passphrase|secret)"
+
+      # ── Entra auth only — no Graph API calls ──
+      - type: output-not-matches
+        config:
+          pattern: '(?i)graph\.microsoft\.com'
+
+      # ── No manual "Next Steps" punt — agent must execute the deploy ──
+      - type: output-not-matches
+        config:
+          pattern: "(?i)next steps.{0,100}(az webapp deploy|zip.*deploy|deploy your code)"
+
+      # ── Bicep default IaC — no Terraform in output ──
+      - type: output-not-matches
+        config:
+          pattern: "(?i)terraform\\s+(init|plan|apply)|hashicorp/azurerm"
+
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # ── Test 2: Container Apps deploy — depth + safety, managed identity, code deploy ──
+  # Container Apps fixture; no earlyTerminate so `az acr build` completes and is counted.
+  - name: "Deploy Verify - Container Apps Pipeline"
+    prompt: "Use the azure-app-onboard skill to deploy my code to Azure."
+    tags:
+      type: integration
+      tier: full
+      cost: azure
+      area: deployment
+      debug: deploy-verify-containerapps
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+    environment:
+      commands:
+        - git init -q
+        - 'git remote add origin https://github.com/vaibbavis/GitHub-Copilot-for-Azure.git'
+        - git fetch -q --depth 1 origin fixtures/deploy-container-apps
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 200
+    graders:
+      # routing gate
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+
+      # ── CODE DEPLOY EXECUTED: container image built/pushed + Bicep deploy ──
+      # (Matches Jest CA "must execute code deploy" — az acr build runs to completion
+      # here because there is no earlyTerminate to abort it.)
+      - type: tool-calls
+        config:
+          required:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+acr\\s+build\\b"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+deployment\\s+(sub|group)\\s+create\\b"
+          disallowed:
+            # no azd fallback
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)azd\\s+(up|provision|deploy)\\b"
+            # Bicep is the default IaC — no Terraform
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)terraform\\s+(init|plan|apply)"
+            # no imperative resource mutation
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+(containerapp|acr)\\s+update"
+
+      # ── PREFLIGHT ORDERING: az account show before az deployment ──
+      - type: tool-calls
+        config:
+          sequence:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az account show"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az deployment (sub|group) create"
+
+      # ── MANAGED IDENTITY: Container Apps IaC MUST use a managed identity ──
+      # (Matches Jest CA managed-identity check — SystemAssigned required, no F1/D1 exception.)
+      - type: file-matches
+        config:
+          path: "**/infra/**/*.bicep"
+          pattern: "(?i)systemassigned|userassigned|identity"
+
+      # ── BICEP TAG retained through deploy ──
+      - type: file-matches
+        config:
+          path: "**/infra/**/*.bicep"
+          pattern: "app-onboard-skill"
+
+      # ── PHASE ARTIFACTS ──
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/scaffold-manifest.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-checklist.md"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
+
+      # ── CONTEXT progression ──
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/context.json"
+          pattern: '"completedPhases"\s*:\s*\[[^\]]*"deploy"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/context.json"
+          pattern: '"currentPhase"\s*:\s*null'
+
+      # ── DEPLOY-RESULT SCHEMA (Jest HARD fields: status, subscriptionId, resourceGroupName, sessionId) ──
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"status"\s*:\s*"succeeded"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"subscriptionId"\s*:\s*"[0-9a-f\-]{36}"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"resourceGroupName"\s*:\s*"[a-z][a-z0-9\-_]{2,}"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"sessionId"\s*:\s*"[0-9a-f\-]{36}"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"healthStatus"\s*:\s*"(healthy|degraded|unreachable|unknown)"'
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"endpoints"\s*:\s*\['
+
+      # ── LIVE ENDPOINT surfaced — Container Apps FQDN ──
+      - type: output-matches
+        config:
+          pattern: "azurecontainerapps\\.io"
+
+      # ── No manual "Next Steps" for code deploy (Jest `hasManualDeploySteps`) ──
+      - type: output-not-matches
+        config:
+          pattern: "(?i)next steps.{0,100}(docker build|docker push|deploy your code|az containerapp update)"
+
+      # ── Bicep default IaC — no Terraform in output ──
+      - type: output-not-matches
+        config:
+          pattern: "(?i)terraform\\s+(init|plan|apply)|hashicorp/azurerm"
+
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+
+  # ── Test 3: Handoff — post-deploy cleanup / identity / recommendations ──
+  # Source: deploy/integration-handoff.test.ts. App Service fixture; deploy-outcome-agnostic.
+  # assertHandoffPresented = >=3 of {identity, cleanup, redeploy, recommendations}; Vally can't
+  # express "3 of 4", so all four are required (redeploy is mandatory per handoff-protocol.md).
+  - name: "Deploy Handoff - Cleanup Identity Recommendations"
+    prompt: "Use the azure-app-onboard skill to deploy my code to Azure."
+    tags:
+      type: integration
+      tier: full
+      cost: azure
+      area: deployment
+      debug: deploy-handoff-appservice
+      skill: azure-app-onboard
+      followUp:
+        - "Just go with defaults using my current subscription."
+        - "Yes."
+        - "Yes."
+        - "Yes."
+    environment:
+      commands:
+        - git init -q
+        - 'git remote add origin https://github.com/vaibbavis/GitHub-Copilot-for-Azure.git'
+        - git fetch -q --depth 1 origin fixtures/deploy-app-service
+        - git checkout -q FETCH_HEAD -- .
+    constraints:
+      max_turns: 200
+    graders:
+      # routing gate
+      - type: skill-invocation
+        config:
+          required: ["azure-app-onboard"]
+
+      # ── DEPLOY EXECUTED (handoff can only follow a real deploy) ──
+      - type: tool-calls
+        config:
+          sequence:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az account show"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az deployment (sub|group) create"
+      - type: tool-calls
+        config:
+          required:
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)az\\s+deployment\\s+(sub|group)\\s+create\\b"
+          disallowed:
+            # no azd fallback (Jest handoff disallows azd)
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)azd\\s+(up|provision|deploy)\\b"
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)terraform\\s+(init|plan|apply)"
+
+      # ── HANDOFF CONTENT (Jest `assertHandoffPresented`) ──
+      # deploy identity surfaced
+      - type: output-matches
+        config:
+          pattern: "(?i)deployed by|signed in as|managed identity|service principal|subscription"
+      # cleanup commands provided
+      - type: output-matches
+        config:
+          pattern: "(?i)az group delete|clean up|remove the resource|delete the resource|tear down"
+      # post-deploy recommendations / next steps
+      - type: output-matches
+        config:
+          pattern: "(?i)next step|recommend|consider|post-deploy|you should|suggestion"
+      # redeploy shortcut — handoff-protocol.md marks this mandatory
+      - type: output-matches
+        config:
+          pattern: "(?i)redeploy|re-deploy|deploy again|push code"
+
+      # ── HANDOFF ARTIFACT: deployment-summary.md contains the mandatory sections
+      #    (handoff-protocol.md Step 9) — verifies the handoff was actually written ──
+      # cleanup command — "az group delete -n {rg} --yes --no-wait" (always printed)
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
+          pattern: "(?i)az group delete"
+      # deployment identity / portal link (first lines of the handoff per protocol)
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
+          pattern: "(?i)portal\\.azure\\.com"
+      # redeploy command surfaced in the summary ("Include this ... AND in deployment-summary.md")
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
+          pattern: "(?i)redeploy"
+
+      # ── PHASE ARTIFACTS (Jest handoff: context.json, prereq-output.json, prepare-plan.json
+      #    + assertDeployChecklistExists; handoff is post-deploy so all pipeline outputs exist) ──
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prereq-output.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-checklist.md"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/deployment-summary.md"
+
+      # ── SESSION FILE (Jest `assertSessionFileCreated` + `assertPhaseArtifactsExist`) ──
+      # context.json must exist
+      - type: file-exists
+        config:
+          path: "**/.copilot-azure/sessions/**/context.json"
+
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
