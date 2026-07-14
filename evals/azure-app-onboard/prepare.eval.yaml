@@ -545,10 +545,14 @@ stimuli:
       - type: output-matches
         config:
           pattern: "(?i)gradle|build\\.gradle|spring boot|spring|java"
-      # Kafka → Azure Event Hubs
-      - type: output-matches
+      # Kafka → Azure Event Hubs — assert in the plan artifact, not spoken output.
+      # earlyTerminate fires on the prepare-plan write-result (which precedes the "ready to
+      # proceed" gate), so the plan is present at grade time; mapping lands here even when
+      # the chat summary doesn't name it.
+      - type: file-matches
         config:
-          pattern: "(?i)event hubs|eventhubs|kafka[\\s\\S]{0,40}protocol|kafka-compatible"
+          path: "**/.copilot-azure/sessions/**/prepare-plan.json"
+          pattern: "(?i)event\\s*hubs?|eventhubs?|microsoft\\.eventhub"
       # PostgreSQL dependency detected
       - type: output-matches
         config:
