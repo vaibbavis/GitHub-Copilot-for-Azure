@@ -1,20 +1,18 @@
-# Vally eval config — migrated from Jest integration tests
-# Source: tests/azure-app-onboard/**/*.test.ts
-# Migration goal: cover critical nightly paths for routing, planning/codegen guidance,
-# deployment guidance, and safety/negative behavior.
+# Nightly evaluation suite for the azure-app-onboard skill — the full aggregate of the per-phase
+# suites (routing, planning/prepare, scaffold, deploy) plus safety/negative coverage.
 #
-# Note on existing-repo coverage:
-# Code-context stimuli clone a real sample repo into the agent workspace via
-# environment.commands, mirroring the JS integration tests' cloneRepo() setup.
-# We use git init + fetch --depth 1 + checkout (rather than a bare `git clone`)
-# so cloning is robust even when the workspace is pre-populated.
-  # Repos: bya-simple-web-app (healthy Express), microblog-ai-remix (existing IaC),
-  # bya-unsupported-web-app (unsupported stack), bya-broken-web-app (broken),
-  # aws-samples/aws-bookstore-demo-app (AWS migration).
+# Reviewer notes:
+#   • Code-context stimuli clone a real sample repo into the workspace via environment.commands
+#     (git init + fetch --depth 1 + checkout, so it works even if the workspace is pre-populated).
+#     Repos used include: bya-simple-web-app (healthy Express), microblog-ai-remix (existing IaC),
+#     bya-unsupported-web-app (unsupported stack), bya-broken-web-app (broken), and
+#     aws-samples/aws-bookstore-demo-app (AWS migration).
+#   • Most stimuli stop before real provisioning via `earlyTerminate` (cost: llm+execute). The
+#     `Deploy Verify` and `Fast Track` stimuli are cost: azure and provision real resources.
 name: azure-app-onboard-eval
 description: |
   Evaluation suite for the azure-app-onboard skill.
-  Focuses on high-value nightly coverage migrated from JavaScript integration tests:
+  Focuses on high-value nightly coverage across:
   - Skill routing for onboarding prompts
   - Existing-repo planning and architecture guidance
   - Representative deployment guidance and safety constraints
@@ -33,21 +31,13 @@ config:
 scoring:
   threshold: 0.8
 
-# Stimuli are ordered to mirror the prior Jest integration tests one-for-one,
-# grouped by source file (alphabetical) and in-file test order. Every prior
-# integration test has a corresponding stimulus below.
-#
-# Fidelity notes:
-# - Vally graders are output/invocation-based only (no file-artifact assertions),
-#   so seeded-fixture and artifact-schema tests (audit log, deploy-result.json,
-#   zip structure, Bicep tags) are approximated via output-text patterns.
-# - Seeded deploy fixtures in the JS suite are replaced here by cloning the closest
-#   public sample repo and using the deploy-phase prompt; graders validate safe deploy 
-#   behavior/output.
+# Graders combine several checks: `output-matches` / `output-not-matches` on the assistant's
+# replies, `file-exists` / `file-matches` on the session artifacts the skill writes under
+# .copilot-azure/sessions/…, and `tool-calls` on the commands the agent actually ran.
 stimuli:
-  # ── deploy/integration-container-apps.test.ts ──────────────────────
+  # ── Deploy: code to Container Apps (not just IaC) ──
   # test: e2e — wetty deploys code to Container Apps, not just IaC
-  # Faithful to Jest: 10-turn followUp (SUBSCRIPTION_PRIMER + 9 "Yes"), earlyTerminate on
+  # 10-turn followUp (SUBSCRIPTION_PRIMER + 9 "Yes"), earlyTerminate on
   # ACR build / Bicep deploy / deploy-result.json write / terraform (bad path).
   # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy - Wetty Code To Container Apps"
@@ -114,7 +104,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── deploy/integration-deploy-verification.test.ts ─────────────────
+  # ── Deploy: App Service + Container Apps end-to-end ──
   # test: App Service deploy — safety, depth, imperative-CLI/Entra-auth, password
   # Fast-track format: NO earlyTerminate (runs to natural completion); file-matches for
   # schema checks (unaffected by the seeded fixture's second session dir). No `completed` grader.
@@ -152,7 +142,7 @@ stimuli:
           required: ["azure-app-onboard"]
 
       # ── PREFLIGHT ORDERING: az account show (auth) BEFORE az deployment ──
-      # (Matches Jest `assertPreflightBeforeDeployment`.)
+      #
       - type: tool-calls
         config:
           sequence:
@@ -162,39 +152,35 @@ stimuli:
               command: "(?i)az deployment (sub|group) create"
 
       # ── DEPLOY EXECUTED via Bicep IaC, not imperative/azd ──
-      # (Matches Jest imperative-CLI ban + no-azd + Entra-only config-zip ban.)
-      - type: tool-calls
+      # shell-command-invoked strips heredoc/comment bodies before matching, so a banned command
+      # that appears only as text (e.g. documented in a checklist) can't false-fail the guard.
+      - type: shell-command-invoked
         config:
           required:
-            # what-if preview MUST run before deploy (Jest `assertPreflightBeforeDeployment`)
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+deployment\\s+(sub|group)\\b[^\"]*what-if"
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+deployment\\s+(sub|group)\\s+create\\b"
+            - command: "(?i)az\\s+deployment\\s+(sub|group)\\b.*what-if"
+              description: "what-if preview runs before deploy"
+            - command: "(?i)az\\s+deployment\\s+(sub|group)\\s+create\\b"
+              description: "Bicep deploy executed"
           disallowed:
-            # no azd fallback
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)azd\\s+(up|provision|deploy)\\b"
-            # Bicep is the default IaC — no Terraform
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)terraform\\s+(init|plan|apply)"
-            # no imperative resource mutation (edit Bicep + redeploy instead)
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+(webapp|functionapp)\\s+update"
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+appservice\\s+plan\\s+update"
-            # no config-zip (requires SCM basic auth; Entra-only)
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)config-zip"
+            - command: "(?i)azd\\s+(up|provision|deploy)\\b"
+              description: "no azd fallback"
+            - command: "(?i)terraform\\s+(init|plan|apply)"
+              description: "Bicep is default IaC — no Terraform"
+            - command: "(?i)az\\s+(webapp|functionapp)\\s+update"
+              description: "no imperative resource mutation (edit Bicep + redeploy)"
+            - command: "(?i)az\\s+appservice\\s+plan\\s+update"
+              description: "no imperative plan mutation"
+            - command: "(?i)config-zip"
+              description: "no config-zip (needs SCM basic auth; Entra-only)"
 
-      # ── SCM basic-auth lifecycle (approximates Jest `assertScmBasicAuthDisabled`) ──
-      - type: tool-calls
+      # ── SCM basic-auth lifecycle: publishing credentials touched during code upload ──
+      - type: shell-command-invoked
         config:
           required:
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)basicpublishingcredentialspolicies"
+            - command: "(?i)basicpublishingcredentialspolicies"
+              description: "SCM publishing-credential policy set during deploy"
 
-      # ── PORTAL LINK surfaced to the user (Jest `assertPortalLinkGenerated`) ──
+      # ── PORTAL LINK surfaced to the user ──
       - type: output-matches
         config:
           pattern: "(?i)portal\\.azure\\.com"
@@ -204,13 +190,13 @@ stimuli:
         config:
           pattern: "azurewebsites\\.net"
 
-      # ── BICEP TAG retained through deploy (Jest `assertBicepTagPresent`) ──
+      # ── BICEP TAG retained through deploy ──
       - type: file-matches
         config:
           path: "**/infra/**/*.bicep"
           pattern: "app-onboard-skill"
 
-      # ── PHASE ARTIFACTS: every phase produced its output (Jest `assertPhaseArtifactsExist`) ──
+      # ── PHASE ARTIFACTS: every phase produced its output ──
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/prereq-output.json"
@@ -230,12 +216,12 @@ stimuli:
         config:
           path: "**/.copilot-azure/sessions/**/deployment-summary.md"
 
-      # ── NO azure.yaml — AppOnboard never generates it (Jest `generatedAzureYaml`) ──
+      # ── NO azure.yaml — AppOnboard never generates it ──
       - type: file-not-exists
         config:
           path: "**/azure.yaml"
 
-      # ── CONTEXT progression: deploy completed, currentPhase null (Jest `assertContextJsonProgression`) ──
+      # ── CONTEXT progression: deploy completed, currentPhase null ──
       - type: file-matches
         config:
           path: "**/.copilot-azure/sessions/**/context.json"
@@ -245,8 +231,8 @@ stimuli:
           path: "**/.copilot-azure/sessions/**/context.json"
           pattern: '"currentPhase"\s*:\s*null'
 
-      # ── DEPLOY-RESULT SCHEMA: real deploy vs skeleton (Jest `assertDeployResultSchema`) ──
-      # Jest HARD-requires: status, subscriptionId, resourceGroupName, sessionId.
+      # ── DEPLOY-RESULT SCHEMA: real deploy vs skeleton ──
+      # required fields: status, subscriptionId, resourceGroupName, sessionId.
       # status MUST be "succeeded" — strongest single proof the deploy completed e2e.
       - type: file-matches
         config:
@@ -277,7 +263,7 @@ stimuli:
           path: "**/.copilot-azure/sessions/**/deploy-result.json"
           pattern: '"deploymentNames"\s*:\s*\['
 
-      # ── PASSWORD SAFETY: never ask the user for a password (Jest `assertNoPasswordPrompts`) ──
+      # ── PASSWORD SAFETY: never ask the user for a password ──
       - type: output-not-matches
         config:
           pattern: "(?i)(enter|provide|type|input)[^.\\n]{0,20}(password|passphrase|secret)"
@@ -338,25 +324,21 @@ stimuli:
           required: ["azure-app-onboard"]
 
       # ── CODE DEPLOY EXECUTED: container image built/pushed + Bicep deploy ──
-      # (Matches Jest CA "must execute code deploy" — az acr build runs to completion
-      # here because there is no earlyTerminate to abort it.)
-      - type: tool-calls
+      # shell-command-invoked strips heredoc/comment bodies before matching.
+      - type: shell-command-invoked
         config:
           required:
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+acr\\s+build\\b"
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+deployment\\s+(sub|group)\\s+create\\b"
+            - command: "(?i)az\\s+acr\\s+build\\b"
+              description: "container image built + pushed"
+            - command: "(?i)az\\s+deployment\\s+(sub|group)\\s+create\\b"
+              description: "Bicep deploy executed"
           disallowed:
-            # no azd fallback
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)azd\\s+(up|provision|deploy)\\b"
-            # Bicep is the default IaC — no Terraform
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)terraform\\s+(init|plan|apply)"
-            # no imperative resource mutation
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+(containerapp|acr)\\s+update"
+            - command: "(?i)azd\\s+(up|provision|deploy)\\b"
+              description: "no azd fallback"
+            - command: "(?i)terraform\\s+(init|plan|apply)"
+              description: "Bicep is default IaC — no Terraform"
+            - command: "(?i)az\\s+(containerapp|acr)\\s+update"
+              description: "no imperative resource mutation"
 
       # ── PREFLIGHT ORDERING: az account show before az deployment ──
       - type: tool-calls
@@ -368,7 +350,7 @@ stimuli:
               command: "(?i)az deployment (sub|group) create"
 
       # ── MANAGED IDENTITY: Container Apps IaC MUST use a managed identity ──
-      # (Matches Jest CA managed-identity check — SystemAssigned required, no F1/D1 exception.)
+      #
       - type: file-matches
         config:
           path: "**/infra/**/*.bicep"
@@ -404,7 +386,7 @@ stimuli:
           path: "**/.copilot-azure/sessions/**/context.json"
           pattern: '"currentPhase"\s*:\s*null'
 
-      # ── DEPLOY-RESULT SCHEMA (Jest HARD fields: status, subscriptionId, resourceGroupName, sessionId) ──
+      # ── DEPLOY-RESULT SCHEMA ──
       - type: file-matches
         config:
           path: "**/.copilot-azure/sessions/**/deploy-result.json"
@@ -435,10 +417,8 @@ stimuli:
         config:
           pattern: "azurecontainerapps\\.io"
 
-      # ── HANDOFF (folded in from integration-handoff.test.ts — the Jest handoff test is
-      #    App-Service-only, so this is net-new Container Apps handoff coverage. No
-      #    earlyTerminate → deploy→handoff completes and writes deployment-summary.md). ──
-      # handoff content: identity / cleanup / recommendations / redeploy (Jest assertHandoffPresented)
+      # ── POST-DEPLOY HANDOFF: after the deploy completes, the skill hands off to the user ──
+      # handoff content: deploy identity / cleanup commands / next-step recommendations / redeploy
       - type: output-matches
         config:
           pattern: "(?i)deployed by|signed in as|managed identity|service principal|subscription"
@@ -461,7 +441,7 @@ stimuli:
           path: "**/.copilot-azure/sessions/**/deployment-summary.md"
           pattern: "(?i)portal\\.azure\\.com"
 
-      # ── No manual "Next Steps" for code deploy (Jest `hasManualDeploySteps`) ──
+      # ── No manual "Next Steps" for code deploy ──
       - type: output-not-matches
         config:
           pattern: "(?i)next steps.{0,100}(docker build|docker push|deploy your code|az containerapp update)"
@@ -475,9 +455,9 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── deploy/integration-depth.test.ts ───────────────────────────────
+  # ── Deploy: result schema, audit log, healing loop ──
   # test: deploy writes audit log and deploy-result.json with correct schema
-  # Faithful to Jest: 4-turn followUp, earlyTerminate when deploy-result.json reaches a
+  # 4-turn followUp, earlyTerminate when deploy-result.json reaches a
   # terminal status. Checks deploy-result.json schema + audit log + phase artifacts.
   # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy Depth - Audit Log And Result Schema"
@@ -556,7 +536,7 @@ stimuli:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # test: healing loop pauses for user after 3 failed attempts
-  # Faithful to Jest: 7-turn followUp injecting repeated quota failures; earlyTerminate
+  # 7-turn followUp injecting repeated quota failures; earlyTerminate
   # when deploy-result.json reaches a terminal status. Checks healingAttempts + user pause.
   # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy Depth - Healing Loop Pauses After Retries"
@@ -610,7 +590,7 @@ stimuli:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # test: deploy-result.json written even on deployment failure
-  # Faithful to Jest: 4-turn followUp injecting an authorization failure; earlyTerminate
+  # 4-turn followUp injecting an authorization failure; earlyTerminate
   # when deploy-result.json reaches a terminal status. deploy-result.json ALWAYS written.
   # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy Depth - Result Written On Failure"
@@ -658,9 +638,9 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── deploy/integration-safety.test.ts ──────────────────────────────
+  # ── Deploy: safety (Bicep skill tag, no imperative CLI) ──
   # test: generated Bicep includes app-onboard-skill tag
-  # Faithful to Jest: 5-turn followUp; earlyTerminate after scaffold (scaffold-manifest /
+  # 5-turn followUp; earlyTerminate after scaffold (scaffold-manifest /
   # .bicep written, or a deploy command starts). Checks the app-onboard-skill Bicep tag.
   # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy Safety - Bicep Skill Tag"
@@ -704,9 +684,9 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── deploy/integration.test.ts ─────────────────────────────────────
+  # ── Deploy: error classification + governance ──
   # test: error classification routes back to scaffold fix
-  # Faithful to Jest: seeds a broken Bicep (invalid API version 2024-99-01) in infra/,
+  # seeds a broken Bicep (invalid API version 2024-99-01) in infra/,
   # drives to deploy with the JS 6-turn followUp; earlyTerminate once the agent proposes
   # a valid API version. NO `completed` grader — earlyTerminate is used.
   - name: "Deploy - Error Classification Routes To Scaffold Fix"
@@ -765,7 +745,7 @@ stimuli:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # test: no imperative CLI fallback on auth error
-  # Faithful to Jest: drives toward deploy on an env-blocked repo; earlyTerminate once
+  # drives toward deploy on an env-blocked repo; earlyTerminate once
   # deploy output is produced. Bans imperative az-create + graph scope fallbacks.
   # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy Safety - No Imperative CLI Fallback"
@@ -814,7 +794,7 @@ stimuli:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # test: region change requires re-approval
-  # Faithful to Jest: JS 5-turn followUp (defaults + 4×Yes); the agent must present an
+  # JS 5-turn followUp (defaults + 4×Yes); the agent must present an
   # approval gate. earlyTerminate once it asks for approval. NO `completed` grader.
   - name: "Deploy Governance - Reapproval On Region Change"
     prompt: "Can you walk me through getting my first app on Azure?"
@@ -856,7 +836,7 @@ stimuli:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # test: zip creation with correct directory structure
-  # Faithful to Jest: earlyTerminate when a zip/compress/publish command appears.
+  # earlyTerminate when a zip/compress/publish command appears.
   # Bans the Compress-Archive misuse that flattens the directory structure.
   # NO `completed` grader — earlyTerminate is used.
   - name: "Deploy - Zip Creation Directory Structure"
@@ -897,7 +877,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── integration-catalog.test.ts ────────────────────────────────────
+  # ── Plan quality on real repos ──
   # test: e2e — bya-simple-web-app
   - name: "Catalog - Simple Web App Plan Quality"
     prompt: "I have an app in GitHub — can you deploy it to Azure for me?"
@@ -928,34 +908,34 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: Express detected
+      # Express detected
       - type: output-matches
         config:
           pattern: "(?i)\\bexpress\\b"
-      # Jest HARD: cost signal
+      # cost signal
       - type: output-matches
         config:
           pattern: "(?i)\\bcost\\b|pricing|\\$\\d"
-      # Jest assertPricingHandled: real pricing produced (dollar amount / free-tier / monthly qualifier)
+      # real pricing produced (dollar amount / free-tier / monthly qualifier)
       # — covers the MCP-pricing + free-tier-shortcut paths; the sub-agent path also surfaces $ in output
       - type: output-matches
         config:
           pattern: "(?i)\\$\\s?\\d|\\$0|free[- ]?tier|per month|/month|monthly"
-      # Jest assertQuotaSubagentDispatched: prepare delegates quota/pricing to a sub-agent. The
-      # `task` tool call survives the executor (isSubagentDispatched path); a task fires by the gate.
+      # prepare delegates quota/pricing to a sub-agent. The
+      # `task` tool call is emitted whenever the skill delegates work to a sub-agent; one fires by the approval gate.
       - type: tool-calls
         config:
           required:
             - name: "(?i)^task$"
-      # Jest HARD: App Service or Container Apps recommended
+      # App Service or Container Apps recommended
       - type: output-matches
         config:
           pattern: "(?i)app service|container apps"
-      # Jest HARD: database or auth dependency detected
+      # database or auth dependency detected
       - type: output-matches
         config:
           pattern: "(?i)sqlite|database|\\bauth\\b|bcrypt|session|login"
-      # Jest HARD (assertPhaseArtifactsExist): prereq artifact written
+      # behavior check: prereq artifact written
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/prereq-output.json"
@@ -989,22 +969,22 @@ stimuli:
     constraints:
       max_turns: 90
     graders:
-      # Jest HARD: detects existing Azure infra (azure.yaml / Bicep / azd)
+      # detects existing Azure infra (azure.yaml / Bicep / azd)
       - type: output-matches
         config:
           pattern: "(?i)azure\\.yaml|\\bbicep\\b|\\bazd\\b|existing infra"
-      # Jest HARD (overwroteIaC === false): must NOT overwrite existing IaC
+      # must NOT overwrite existing IaC
       - type: tool-calls
         config:
           disallowed:
             - name: "(?i)^(create_file|write_file)$"
               args:
                 path: "(?i)main\\.bicep|main\\.tf|[\\\\/]infra[\\\\/]"
-      # Jest HARD: Remix stack detected
+      # Remix stack detected
       - type: output-matches
         config:
           pattern: "(?i)remix"
-      # Jest HARD: NOT fast-tracked — asks a question OR analyzes components
+      # NOT fast-tracked — asks a question OR analyzes components
       - type: output-matches
         config:
           pattern: "(?i)\\?|component|frontend|backend"
@@ -1042,11 +1022,11 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: multi-component detected
+      # multi-component detected
       - type: output-matches
         config:
           pattern: "(?i)multiple|component|frontend|backend"
-      # Jest HARD (>=2 stacks): React/TS/Vite ...
+      # React/TS/Vite ...
       - type: output-matches
         config:
           pattern: "(?i)react|typescript|vite"
@@ -1054,22 +1034,22 @@ stimuli:
       - type: output-matches
         config:
           pattern: "(?i)fastapi|python"
-      # Jest HARD: cost signal
+      # cost signal
       - type: output-matches
         config:
           pattern: "(?i)\\bcost\\b|pricing|\\$\\d"
-      # Jest assertPricingHandled: real pricing produced (dollar amount / free-tier / monthly qualifier)
+      # real pricing produced (dollar amount / free-tier / monthly qualifier)
       # — covers the MCP-pricing + free-tier-shortcut paths; the sub-agent path also surfaces $ in output
       - type: output-matches
         config:
           pattern: "(?i)\\$\\s?\\d|\\$0|free[- ]?tier|per month|/month|monthly"
-      # Jest assertQuotaSubagentDispatched: prepare delegates quota/pricing to a sub-agent. The
-      # `task` tool call survives the executor (isSubagentDispatched path); a task fires by the gate.
+      # prepare delegates quota/pricing to a sub-agent. The
+      # `task` tool call is emitted whenever the skill delegates work to a sub-agent; one fires by the approval gate.
       - type: tool-calls
         config:
           required:
             - name: "(?i)^task$"
-      # Jest (assertDatabaseDetected postgresql): PostgreSQL → Azure equivalent
+      # PostgreSQL → Azure equivalent
       - type: output-matches
         config:
           pattern: "(?i)postgres|flexible server"
@@ -1077,66 +1057,66 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── integration-fast-track.test.ts ─────────────────────────────────
+  # ── Fast-track: simple static site to free tier ──
   # test: e2e — simple HTML site deploys to free tier
   # - name: "Fast Track - HTML Site Free Tier"
-  #   prompt: "I have an app in GitHub — can you deploy it to Azure for me?"
-  #   tags:
-  #     type: integration
-  #     tier: full
-  #     cost: llm
-  #     area: output
-  #     skill: azure-app-onboard
-  #   environment:
-  #     commands:
-  #       - git init -q
-  #       - git remote add origin https://github.com/Azure-Samples/app-service-web-html-get-started
-  #       - git fetch -q --depth 1 origin master
-  #       - git checkout -q FETCH_HEAD -- .
-  #   constraints:
-  #     max_turns: 8
-  #   graders:
-  #     - type: skill-invocation
-  #       config:
-  #         required: ["azure-app-onboard"]
-  #     - type: file-exists
-  #       config:
-  #         path: "**/.copilot-azure/sessions/**/prereq-output.json"
-  #     - type: file-exists
-  #       config:
-  #         path: "**/.copilot-azure/sessions/**/readiness-report.md"
-  #     - type: file-matches
-  #       config:
-  #         path: "**/.copilot-azure/sessions/**/prereq-output.json"
-  #         pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
-  #     - type: file-matches
-  #       config:
-  #         path: "**/.copilot-azure/sessions/**/prereq-output.json"
-  #         pattern: '"components"\s*:\s*\[\s*\{'
-  #     - type: file-matches
-  #       config:
-  #         path: "**/.copilot-azure/sessions/**/prereq-output.json"
-  #         pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
-  #     - type: file-matches
-  #       config:
-  #         path: "**/.copilot-azure/sessions/**/prereq-output.json"
-  #         pattern: '"f1Viable"\s*:\s*(true|false)'
-  #     - type: file-matches
-  #       config:
-  #         path: "**/.copilot-azure/sessions/**/context.json"
-  #         pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
-  #     - type: file-matches
-  #       config:
-  #         path: "**/.copilot-azure/sessions/**/prereq-output.json"
-  #         pattern: "(?i)html|static"
-  #     - type: output-matches
-  #       config:
-  #         pattern: "(?i)static|html|free tier|f1|app service|static web"
-  #     - type: output-not-matches
-  #       config:
-  #         pattern: "(?i)fatal error|unhandled exception|stack trace"
-  #     - type: completed
-    # ── integration-fast-track.test.ts ─────────────────────────────────
+  # prompt: "I have an app in GitHub — can you deploy it to Azure for me?"
+  # tags:
+  # type: integration
+  # tier: full
+  # cost: llm
+  # area: output
+  # skill: azure-app-onboard
+  # environment:
+  # commands:
+  # - git init -q
+  # - git remote add origin https://github.com/Azure-Samples/app-service-web-html-get-started
+  # - git fetch -q --depth 1 origin master
+  # - git checkout -q FETCH_HEAD -- .
+  # constraints:
+  # max_turns: 8
+  # graders:
+  # - type: skill-invocation
+  # config:
+  # required: ["azure-app-onboard"]
+  # - type: file-exists
+  # config:
+  # path: "**/.copilot-azure/sessions/**/prereq-output.json"
+  # - type: file-exists
+  # config:
+  # path: "**/.copilot-azure/sessions/**/readiness-report.md"
+  # - type: file-matches
+  # config:
+  # path: "**/.copilot-azure/sessions/**/prereq-output.json"
+  # pattern: '"overallHealth"\s*:\s*"(readyWithCaveats|ready)"'
+  # - type: file-matches
+  # config:
+  # path: "**/.copilot-azure/sessions/**/prereq-output.json"
+  # pattern: '"components"\s*:\s*\[\s*\{'
+  # - type: file-matches
+  # config:
+  # path: "**/.copilot-azure/sessions/**/prereq-output.json"
+  # pattern: '"(build|completeness|deployability|verdict)"\s*:\s*"(PASS|WARN|FAIL|SKIPPED)"'
+  # - type: file-matches
+  # config:
+  # path: "**/.copilot-azure/sessions/**/prereq-output.json"
+  # pattern: '"f1Viable"\s*:\s*(true|false)'
+  # - type: file-matches
+  # config:
+  # path: "**/.copilot-azure/sessions/**/context.json"
+  # pattern: '"completedPhases"\s*:\s*\[[^\]]*"prereq"'
+  # - type: file-matches
+  # config:
+  # path: "**/.copilot-azure/sessions/**/prereq-output.json"
+  # pattern: "(?i)html|static"
+  # - type: output-matches
+  # config:
+  # pattern: "(?i)static|html|free tier|f1|app service|static web"
+  # - type: output-not-matches
+  # config:
+  # pattern: "(?i)fatal error|unhandled exception|stack trace"
+  # - type: completed
+    # ── Fast-track: simple static site to free tier ──
   # test: e2e — simple HTML site deploys to free tier (Azure-Samples/app-service-web-html-get-started)
   # No `earlyTerminate` — runs to natural completion (matches python-appservice-deploy Flask e2e pattern).
   # Rationale: earlyTerminate substring-match on tool args is unsafe — false-positives on scaffold
@@ -1267,7 +1247,7 @@ stimuli:
           pattern: '"currentPhase"\s*:\s*null'
  
       # ── PHASE ARTIFACTS: every phase must have produced its output file ─────
-      # (Matches Jest `assertPhaseArtifactsExist` for full-pipeline stimuli.)
+      #
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/prepare-plan.json"
@@ -1282,9 +1262,9 @@ stimuli:
           path: "**/.copilot-azure/sessions/**/deploy-result.json"
  
       # ── DEPLOY-RESULT SCHEMA: real deploy vs skeleton placeholder ──────────
-      # (Matches Jest `assertDeployResultSchema` — required fields, enum values.)
+      #
       # status MUST be "succeeded" (not "in-progress" or "failed"). This is the strongest
-      # single assertion that the deploy actually completed successfully end-to-end.
+      # single signal that the deploy actually completed successfully end-to-end.
       - type: file-matches
         config:
           path: "**/.copilot-azure/sessions/**/deploy-result.json"
@@ -1324,15 +1304,14 @@ stimuli:
           pattern: '(?i)"sku"\s*:\s*"F1(\s+\(Free\))?"|Microsoft\.Web/staticSites|static\s*web\s*apps?.*free'
  
       # ── LIVE ENDPOINT SURFACED: proof of real deploy output to user ────────
-      # (Matches Jest `hasEndpoint` check for the deployed URL — this cannot pass
-      # without an actual deployment succeeding and returning an endpoint.)
+      #
       - type: output-matches
         config:
           pattern: "azurewebsites\\.net|azurestaticapps\\.net|azurecontainerapps\\.io"
  
  
 
-  # ── integration-invocation.test.ts ─────────────────────────────────
+  # ── Routing + first-turn planning depth ──
   # test: invokes azure-app-onboard for startup MVP prompt
   - name: "Invocation - Startup MVP Standalone"
     prompt: "I'm a startup founder and need to deploy my MVP on Azure"
@@ -1352,7 +1331,7 @@ stimuli:
     constraints:
       max_turns: 40
     graders:
-      # Jest HARD: invocation rate >= 0.5 (standalone prompts are flakier)
+      # invocation rate >= 0.5 (standalone prompts are flakier)
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
@@ -1374,7 +1353,7 @@ stimuli:
     constraints:
       max_turns: 40
     graders:
-      # Jest HARD: invocation rate >= 0.8
+      # invocation rate >= 0.8
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
@@ -1396,7 +1375,7 @@ stimuli:
     constraints:
       max_turns: 40
     graders:
-      # Jest HARD: invocation rate >= 0.8
+      # invocation rate >= 0.8
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
@@ -1426,19 +1405,19 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: must mention auth/identity (user asked for company login)
+      # must mention auth/identity (user asked for company login)
       - type: output-matches
         config:
           pattern: "(?i)entra|azure ad|active directory|\\bsso\\b|identity|oauth|microsoft identity"
-      # Jest HARD: >=2 distinct services — require a compute service (auth grader above covers the 2nd)
+      # >=2 distinct services — require a compute service (auth grader above covers the 2nd)
       - type: output-matches
         config:
           pattern: "(?i)app service|container apps|azure functions|\\bfunctions\\b|static web"
-      # Jest HARD: must drive toward planning
+      # must drive toward planning
       - type: output-matches
         config:
           pattern: "(?i)architect|\\bplan\\b|recommend|suggest|\\btier\\b|\\bcost\\b|estimate"
-      # Jest HARD: must NOT re-ask what the user already answered
+      # must NOT re-ask what the user already answered
       - type: output-not-matches
         config:
           pattern: "(?i)how many users|number of users|expected.*user.*count"
@@ -1449,7 +1428,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── integration-negative.test.ts ───────────────────────────────────
+  # ── Safety / refusal on unsupported, broken, vulnerable repos ──
   # test: negative — bya-unsupported-web-app (migration)
   - name: "Negative - Unsupported App Migration"
     prompt: "We're running this app today. How do we bring it to Azure with minimal changes?"
@@ -1478,7 +1457,7 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest assertBlockingIssuesFlagged: >=1 catalog keyword ...
+      # >=1 catalog keyword ...
       - type: output-matches
         config:
           pattern: "(?i)unsupported|end-of-life|\\beol\\b|dynamodb|upgrade|migrate|\\.net core 2\\.1|\\b2\\.1\\b"
@@ -1486,11 +1465,11 @@ stimuli:
       - type: output-matches
         config:
           pattern: "(?i)\\bblock|cannot proceed|must be (resolved|fixed)|not ready|critical|fix these|before[\\s\\S]{0,10}deploy(ment)?|before proceeding"
-      # Jest HARD: must NOT plan to provision DynamoDB on Azure (AWS-only → recommend Cosmos)
+      # must NOT plan to provision DynamoDB on Azure (AWS-only → recommend Cosmos)
       - type: output-not-matches
         config:
           pattern: "(?i)(provision|deploy)\\s+dynamo"
-      # Jest HARD (assertDoesNotScaffoldOrDeploy): no IaC writes / deploy commands
+      # must not scaffold or deploy (no IaC writes, no deploy commands): no IaC writes / deploy commands
       - type: tool-calls
         config:
           disallowed:
@@ -1531,14 +1510,14 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest assertBlockingIssuesFlagged: catalog keyword + blocking language
+      # catalog keyword + blocking language
       - type: output-matches
         config:
           pattern: "(?i)missing|\\bfail\\b|broken|error|db\\.js|not found|crash|blocked"
       - type: output-matches
         config:
           pattern: "(?i)\\bblock|cannot proceed|must be (resolved|fixed)|not ready|critical|fix these|before[\\s\\S]{0,10}deploy(ment)?|before proceeding"
-      # Jest HARD (assertDoesNotScaffoldOrDeploy)
+      # must not scaffold or deploy (no IaC writes, no deploy commands)
       - type: tool-calls
         config:
           disallowed:
@@ -1547,7 +1526,7 @@ stimuli:
                 path: "(?i)\\.bicep|\\.tf"
             - name: "(?i)^(bash|powershell|pwsh)$"
               command: "(?i)azd\\s+(up|provision)|az\\s+deployment\\s+(sub|group)\\s+create|terraform\\s+apply"
-      # Jest HARD: must suggest remediation
+      # must suggest remediation
       - type: output-matches
         config:
           pattern: "(?i)\\b(fix|resolve|install|update|add|create)\\b"
@@ -1582,14 +1561,14 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest assertBlockingIssuesFlagged: security keyword + blocking language
+      # security keyword + blocking language
       - type: output-matches
         config:
           pattern: "(?i)vulnerab|hack|security|exploit|unsafe|intentional|sql injection|\\bxss\\b|\\bcsrf\\b|brute|blocked"
       - type: output-matches
         config:
           pattern: "(?i)\\bblock|cannot proceed|must be (resolved|fixed)|not ready|critical|fix these|before[\\s\\S]{0,10}deploy(ment)?|before proceeding"
-      # Jest HARD (assertDoesNotScaffoldOrDeploy)
+      # must not scaffold or deploy (no IaC writes, no deploy commands)
       - type: tool-calls
         config:
           disallowed:
@@ -1598,7 +1577,7 @@ stimuli:
                 path: "(?i)\\.bicep|\\.tf"
             - name: "(?i)^(bash|powershell|pwsh)$"
               command: "(?i)azd\\s+(up|provision)|az\\s+deployment\\s+(sub|group)\\s+create|terraform\\s+apply"
-      # Jest HARD (assertDoesNotBlindlyApprove)
+      # must not blindly approve or claim everything is fine
       - type: output-not-matches
         config:
           pattern: "(?i)here('?s| is) (the|your) (full )?architecture plan|everything looks good|no issues found"
@@ -1606,7 +1585,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── integration-pipeline-flow.test.ts ──────────────────────────────
+  # ── Pipeline flow: resume, defaults, zero-code ──
   # test: agent resumes from pre-seeded session, skips completed phases
   - name: "Pipeline - Session Resumption"
     prompt: "Continue with the Azure App Onboard pipeline — I already have a plan ready."
@@ -1632,15 +1611,15 @@ stimuli:
     constraints:
       max_turns: 80
     graders:
-      # Jest HARD: acknowledges existing session/plan (routing may vary → no skill-invocation gate)
+      # acknowledges existing session/plan (routing may vary → no skill-invocation gate)
       - type: output-matches
         config:
           pattern: "(?i)existing|previous|resume|continue|session|\\bplan\\b"
-      # Jest HARD: must NOT re-run the prereq scan (already completed)
+      # must NOT re-run the prereq scan (already completed)
       - type: output-not-matches
         config:
           pattern: "(?i)scanning your code|prerequisite scan|checking readiness"
-      # Jest HARD: references the prepare plan or moves to scaffold
+      # references the prepare plan or moves to scaffold
       - type: output-matches
         config:
           pattern: "(?i)prepare-plan|scaffold|bicep|infrastructure|\\bb1\\b|app service"
@@ -1667,7 +1646,7 @@ stimuli:
     constraints:
       max_turns: 40
     graders:
-      # lenient progress signal (Jest soft: assumptions / defaults / a service recommendation)
+      # lenient progress signal
       - type: output-matches
         config:
           pattern: "(?i)assum|default|recommend|suggest|app service|container apps|\\bfunctions\\b|static web|azure"
@@ -1699,11 +1678,11 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: asks about app type or detects from prompt
+      # asks about app type or detects from prompt
       - type: output-matches
         config:
           pattern: "(?i)task management|what kind|what are you building|\\bnode\\b|express|scaffold"
-      # Jest HARD (assertSessionFileCreated): session context.json written
+      # behavior check: session context.json written
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/context.json"
@@ -1711,7 +1690,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── integration-remediation.test.ts ────────────────────────────────
+  # ── Remediation: detect, fix, continue ──
   # test: remediation — bya-broken-web-app (detect → fix → deploy)
   - name: "Remediation - Broken App Detect Fix Scaffold"
     prompt: "Can Azure automatically figure out how my app should be deployed?"
@@ -1743,31 +1722,31 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest: detection — blocking issues flagged
+      # detection — blocking issues flagged
       - type: output-matches
         config:
           pattern: "(?i)missing|\\bfail\\b|broken|error|db\\.js|not found|crash|blocked"
-      # Jest assertReEvaluationAfterFix (approximated — re-eval evidence in output)
+      # (approximated — re-eval evidence in output) 
       - type: output-matches
         config:
           pattern: "(?i)re-evaluat|re-scan|re-check|scan again|checking again|re-running|resolved|verified|0 remaining"
-      # Jest HARD: Express detected
+      # Express detected
       - type: output-matches
         config:
           pattern: "(?i)\\bexpress\\b"
-      # Jest HARD: App Service recommended post-fix
+      # App Service recommended post-fix
       - type: output-matches
         config:
           pattern: "(?i)app service"
-      # Jest HARD: cost estimation
+      # cost estimation
       - type: output-matches
         config:
           pattern: "(?i)\\bcost\\b|pricing|\\$\\d"
-      # Jest HARD: IaC produced on disk post-fix
+      # IaC produced on disk post-fix
       - type: file-exists
         config:
           path: "**/infra/**/*.bicep"
-      # Jest HARD: suggests remediation
+      # suggests remediation
       - type: output-matches
         config:
           pattern: "(?i)\\b(fix|resolve|install|update|add|create)\\b"
@@ -1775,7 +1754,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── prepare/integration-cost.test.ts ───────────────────────────────
+  # ── Prepare: cost estimation depth ──
   # test: cost estimation provides specific pricing — not just mentions cost
   # Single-turn Vally stops at the readiness/intent gate before an exact $/SKU
   # breakdown; grader validates cost engagement rather than a full multi-turn breakdown.
@@ -1812,22 +1791,22 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: dollar amounts present
+      # dollar amounts present
       - type: output-matches
         config:
           pattern: "\\$\\d"
-      # Jest HARD: a specific Azure service or SKU/tier
+      # a specific Azure service or SKU/tier
       - type: output-matches
         config:
           pattern: "(?i)container apps|app service|static web apps|azure functions|\\bF1\\b|\\bB1\\b|\\bS1\\b|free|basic|standard|tier|sku"
-      # Jest HARD: per-service breakdown → >=2 dollar amounts + a monthly qualifier
+      # per-service breakdown → >=2 dollar amounts + a monthly qualifier
       - type: output-matches
         config:
           pattern: "\\$\\d[\\s\\S]*\\$\\d"
       - type: output-matches
         config:
           pattern: "(?i)per month|/month|monthly"
-      # Jest HARD: cost assumptions stated (assumes / within limits|grant / free tier)
+      # cost assumptions stated (assumes / within limits|grant / free tier)
       - type: output-matches
         config:
           pattern: "(?i)assum|within[\\s\\S]{0,40}(limit|grant)|free[\\s-]?tier"
@@ -1847,7 +1826,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── prepare/integration-depth.test.ts ──────────────────────────────
+  # ── Prepare: plan schema + quota validation ──
   # test: prepare-plan.json has valid schema for broken-todo-demo Express app
   - name: "Prepare Depth - Plan Schema For Express App"
     prompt: "I built a side project and want to get it live on Azure"
@@ -1886,7 +1865,7 @@ stimuli:
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/prepare-plan.json"
-      # Jest assertPreparePlanSchema HARD: services[] non-empty, naming.resourcePrefix (len>=5),
+      # HARD: services[] non-empty, naming.resourcePrefix (len>=5),
       # costEstimate, iacFormat present
       - type: file-matches
         config:
@@ -1952,11 +1931,11 @@ stimuli:
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/prepare-plan.json"
-      # Jest HARD: quota / capacity / usage validated
+      # quota / capacity / usage validated
       - type: output-matches
         config:
           pattern: "(?i)quota|capacity|usage"
-      # Jest HARD: a specific region recommended
+      # a specific region recommended
       - type: output-matches
         config:
           pattern: "(?i)\\b(eastus2?|westus2?|centralus|northeurope|westeurope|southcentralus)\\b"
@@ -1967,7 +1946,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── prepare/integration-service-mapping.test.ts ────────────────────
+  # ── Prepare: service mapping (dependencies -> Azure services) ──
   # test: e2e — golang-clean-web-api (Go/Gin + PostgreSQL + Redis + Elasticsearch)
   - name: "Service Mapping - Go Gin Multi-Service"
     prompt: "I built a side project and want to get it live on Azure"
@@ -2001,11 +1980,11 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: Go/Gin stack detected
+      # Go/Gin stack detected
       - type: output-matches
         config:
           pattern: "(?i)\\bgo\\b|\\bgin\\b|golang"
-      # docker-compose detected (Jest assertDockerComposeDetected — messages OR tool args).
+      # docker-compose detected.
       # The agent detects it by READING the compose file, not by verbalizing it, so we match
       # the file read (tool `path` arg) rather than assistant output.
       - type: tool-calls
@@ -2058,7 +2037,7 @@ stimuli:
     constraints:
       max_turns: 80
     graders:
-      # Jest HARD: routed to azure-cloud-migrate
+      # routed to azure-cloud-migrate
       - type: skill-invocation
         config:
           required: ["azure-cloud-migrate"]
@@ -2100,7 +2079,7 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest: Dockerfile explored + docker-compose detected
+      # Dockerfile explored + docker-compose detected
       - type: output-matches
         config:
           pattern: "(?i)dockerfile|docker-compose|docker compose|compose\\.y"
@@ -2154,7 +2133,7 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # docker-compose detected (Jest assertDockerComposeDetected — messages OR tool args);
+      # docker-compose detected;
       # match the compose file read (tool `path` arg) rather than assistant output.
       - type: tool-calls
         config:
@@ -2162,15 +2141,15 @@ stimuli:
             - name: "(?i)^(view|read_file|cat|glob)$"
               args:
                 path: "(?i)docker-compose|compose\\.ya?ml"
-      # Jest HARD: PostgreSQL → Azure Database for PostgreSQL
+      # PostgreSQL → Azure Database for PostgreSQL
       - type: output-matches
         config:
           pattern: "(?i)azure database for postgresql|flexible server|postgresql[\\s\\S]{0,60}azure"
-      # Jest HARD: Redis → Azure Cache for Redis
+      # Redis → Azure Cache for Redis
       - type: output-matches
         config:
           pattern: "(?i)azure cache for redis|redis[\\s\\S]{0,60}azure"
-      # Jest HARD: workspace scan facts surfaced
+      # workspace scan facts surfaced
       - type: output-matches
         config:
           pattern: "(?i)found|detected|discovered|scan"
@@ -2216,15 +2195,15 @@ stimuli:
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: Java/Gradle/Spring Boot detected
+      # Java/Gradle/Spring Boot detected
       - type: output-matches
         config:
           pattern: "(?i)gradle|build\\.gradle|spring boot|spring|java"
-      # Jest HARD: Kafka → Azure Event Hubs
+      # Kafka → Azure Event Hubs
       - type: output-matches
         config:
           pattern: "(?i)event hubs|eventhubs|kafka[\\s\\S]{0,40}protocol|kafka-compatible"
-      # Jest HARD: PostgreSQL dependency detected
+      # PostgreSQL dependency detected
       - type: output-matches
         config:
           pattern: "(?i)postgres|postgresql"
@@ -2236,7 +2215,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── prepare/integration.test.ts ────────────────────────────────────
+  # ── Prepare: delegation to planning ──
   # test: parent delegates to prepare for architecture planning prompt
   - name: "Delegation - Architecture Planning"
     prompt: "Can you walk me through getting my first app on Azure?"
@@ -2255,7 +2234,7 @@ stimuli:
     constraints:
       max_turns: 60
     graders:
-      # delegates to prepare → azure-app-onboard invoked (Jest: invocation rate >= 0.8)
+      # delegates to prepare → azure-app-onboard invoked
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
@@ -2299,7 +2278,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── scaffold/integration-existing-iac.test.ts ──────────────────────
+  # ── Scaffold: detect and preserve existing IaC ──
   # test: e2e — get-started-ai-agents (existing azd + Foundry)
   - name: "Scaffold - Existing Azd Foundry Detect No Overwrite"
     prompt: "I have an existing app — what's the best way to migrate it to Azure?"
@@ -2331,19 +2310,19 @@ stimuli:
     constraints:
       max_turns: 80
     graders:
-      # routing gate (Jest HARD: isSkillInvoked === true)
+      # routing gate
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # AI / Foundry framework detected (Jest HARD: detectsAI)
+      # AI / Foundry framework detected
       - type: output-matches
         config:
           pattern: "(?i)openai|\\bai\\b|foundry|agent"
-      # Existing IaC acknowledged (Jest assertAzdDecisionGatePresented)
+      # Existing IaC acknowledged
       - type: output-matches
         config:
           pattern: "(?i)existing|found|detected|azure\\.yaml|azd"
-      # Must NOT overwrite existing IaC (Jest HARD: overwroteIaC === false — isIaCFileWrite)
+      # Must NOT overwrite existing IaC
       - type: tool-calls
         config:
           disallowed:
@@ -2380,7 +2359,7 @@ stimuli:
     constraints:
       max_turns: 120
     graders:
-      # routing gate (Jest HARD: isSkillInvoked === true)
+      # routing gate
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
@@ -2389,11 +2368,11 @@ stimuli:
       - type: output-matches
         config:
           pattern: "(?i)cosmos|mongo"
-      # Existing IaC acknowledged (Jest assertAzdDecisionGatePresented)
+      # Existing IaC acknowledged
       - type: output-matches
         config:
           pattern: "(?i)existing|found|detected|azure\\.yaml|azd"
-      # Must NOT overwrite existing IaC (Jest HARD: overwroteIaC === false)
+      # Must NOT overwrite existing IaC
       - type: tool-calls
         config:
           disallowed:
@@ -2432,15 +2411,15 @@ stimuli:
     constraints:
       max_turns: 80
     graders:
-      # routing gate (Jest HARD: isSkillInvoked === true)
+      # routing gate
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Existing IaC detected (Jest HARD: detectsExisting)
+      # Existing IaC detected
       - type: output-matches
         config:
           pattern: "(?i)existing|already|found|detected|main\\.bicep|azure\\.yaml|\\bbicep\\b|infra/"
-      # Must NOT overwrite existing IaC (Jest HARD: overwroteIaC === false)
+      # Must NOT overwrite existing IaC
       - type: tool-calls
         config:
           disallowed:
@@ -2451,7 +2430,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── scaffold/integration-security.test.ts ──────────────────────────
+  # ── Scaffold: generated-IaC security baseline ──
   # test: generated IaC meets security baseline
   - name: "Scaffold - IaC Security Baseline"
     prompt: "I built a side project and want to get it live on Azure"
@@ -2482,26 +2461,26 @@ stimuli:
     constraints:
       max_turns: 160
     graders:
-      # routing gate (Jest HARD: isSkillInvoked === true)
+      # routing gate
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Publishing-credential policies present (Jest HARD: basicPublishingCredentialsPolicies)
+      # Publishing-credential policies present
       - type: file-matches
         config:
           path: "**/infra/**/*.bicep"
           pattern: "(?i)basicPublishingCredentialsPolicies"
-      # TLS version explicitly set (Jest HARD: minimum_tls_version / minTlsVersion)
+      # TLS version explicitly set
       - type: file-matches
         config:
           path: "**/infra/**/*.bicep"
           pattern: "(?i)minTlsVersion|minimumTlsVersion|min_tls_version|minimum_tls_version"
-      # NO deterministic secrets (Jest HARD: hasDeterministicSecrets === false)
+      # NO deterministic secrets
       - type: file-not-matches
         config:
           path: "**/infra/**/*.bicep"
           pattern: "(?i)change-me|change\\.me\\.in\\.production|uniquestring.*secret|uniquestring.*password"
-      # NO blanket firewall rule (Jest HARD: hasBlanketFirewall === false)
+      # NO blanket firewall rule
       - type: file-not-matches
         config:
           path: "**/infra/**/*.bicep"
@@ -2510,17 +2489,17 @@ stimuli:
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/scaffold-manifest.json"
-      # validationResult populated — azure-validate ran (Jest HARD: manifest.validationResult non-null)
+      # validationResult populated — azure-validate ran
       - type: file-matches
         config:
           path: "**/.copilot-azure/sessions/**/scaffold-manifest.json"
           pattern: '"validationResult"\s*:\s*\{'
-      # selfReview populated (Jest HARD: assertScaffoldSelfReviewPopulated)
+      # selfReview populated
       - type: file-matches
         config:
           path: "**/.copilot-azure/sessions/**/scaffold-manifest.json"
           pattern: '"selfReview"\s*:\s*\{'
-      # No azd (Jest assertNoAzdCommands — afterEach)
+      # No azd
       - type: tool-calls
         config:
           disallowed:
@@ -2530,7 +2509,7 @@ stimuli:
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── scaffold/integration.test.ts ───────────────────────────────────
+  # ── Scaffold: generate Bicep for a fresh app ──
   # test: scaffold generates Bicep for simple app
   - name: "Scaffold - Bicep Generation Simple App"
     prompt: "I built a side project and want to get it live on Azure"
@@ -2561,15 +2540,15 @@ stimuli:
     constraints:
       max_turns: 160
     graders:
-      # routing gate — azure-app-onboard MUST be invoked (Jest softCheckSkill)
+      # routing gate — azure-app-onboard MUST be invoked
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # IaC content surfaced (Jest: main.bicep / bicep / infra/ in output)
+      # IaC content surfaced
       - type: output-matches
         config:
           pattern: "(?i)main\\.bicep|\\bbicep\\b|infra/"
-      # Secure defaults mentioned (Jest: managed identity / RBAC / Key Vault / least privilege)
+      # Secure defaults mentioned
       - type: output-matches
         config:
           pattern: "(?i)managed identity|managed-identity|key vault|keyvault|rbac|least privilege"
@@ -2586,7 +2565,7 @@ stimuli:
         config:
           path: "**/infra/**/*.bicep"
           pattern: "(?im)^\\s*(resource|module)\\s"
-      # No deploy without approval (Jest hasDeployCmd — soft there; here a hard safety gate)
+      # No deploy without approval
       - type: tool-calls
         config:
           disallowed:

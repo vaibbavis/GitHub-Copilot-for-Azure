@@ -1,12 +1,16 @@
-  # ── prepare/*.test.ts — prepare-phase eval (10 integration cases) ──
-  # New format (see seeded-deploy-eval.yaml + integration-fast-track-vaibs.yaml): rich
-  # file/output graders. earlyTerminate mirrors the Jest shouldEarlyTerminate* helpers —
-  # halts at the approval gate / plan-presented (prepare-plan.json written) / scaffold-or-
-  # deploy, so the run stops once the plan is presented, BEFORE any real deploy. No `completed`.
-  #   integration.test.ts (2: delegation) · integration-cost.test.ts (1) ·
-  #   integration-depth.test.ts (2) · integration-service-mapping.test.ts (5)
+  # azure-app-onboard — prepare-phase suite: planning depth (services, SKUs, cost, quota) and
+  # correctly mapping app dependencies to Azure services before anything is built.
+  #
+  # How to read this suite (reviewer notes):
+  #   • `earlyTerminate` stops each run once the plan is presented (the approval gate, or a
+  #     prepare-plan.json write), and always OR's in a deploy-command guard, so no real deploy runs.
+  #     All runs are cost: llm+execute — no billed Azure resources.
+  #   • Graders check the plan surfaced to the user (services/SKUs/cost) plus the plan artifacts the
+  #     skill writes under .copilot-azure/sessions/….
+  #
+  # Stimuli: delegation to planning (2) · cost depth (1) · plan-schema depth (2) · service mapping (5).
 
-  # ── prepare/integration.test.ts ────────────────────────────────────
+  # ── Delegation to planning ──
   # test: parent delegates to prepare for architecture planning prompt
   - name: "Delegation - Architecture Planning"
     prompt: "Can you walk me through getting my first app on Azure?"
@@ -25,7 +29,7 @@
     constraints:
       max_turns: 60
     graders:
-      # delegates to prepare → azure-app-onboard invoked (Jest: invocation rate >= 0.8)
+      # delegates to prepare → azure-app-onboard invoked
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
@@ -69,9 +73,9 @@
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── prepare/integration-cost.test.ts ───────────────────────────────
+  # ── Cost estimation depth ──
   # test: cost estimation provides specific pricing — not just mentions cost
-  # earlyTerminate: approval gate (shouldEarlyTerminateForApprovalGate).
+  # earlyTerminate: approval gate (earlyTerminate).
   - name: "Cost Depth - Dollar And SKU Signals"
     prompt: "I need to deploy this app to Azure — but first tell me exactly what it will cost"
     tags:
@@ -105,22 +109,22 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: dollar amounts present
+      # dollar amounts present
       - type: output-matches
         config:
           pattern: "\\$\\d"
-      # Jest HARD: a specific Azure service or SKU/tier
+      # a specific Azure service or SKU/tier
       - type: output-matches
         config:
           pattern: "(?i)container apps|app service|static web apps|azure functions|\\bF1\\b|\\bB1\\b|\\bS1\\b|free|basic|standard|tier|sku"
-      # Jest HARD: per-service breakdown → >=2 dollar amounts + a monthly qualifier
+      # per-service breakdown → >=2 dollar amounts + a monthly qualifier
       - type: output-matches
         config:
           pattern: "\\$\\d[\\s\\S]*\\$\\d"
       - type: output-matches
         config:
           pattern: "(?i)per month|/month|monthly"
-      # Jest HARD: cost assumptions stated (assumes / within limits|grant / free tier)
+      # cost assumptions stated (assumes / within limits|grant / free tier)
       - type: output-matches
         config:
           pattern: "(?i)assum|within[\\s\\S]{0,40}(limit|grant)|free[\\s-]?tier"
@@ -140,9 +144,9 @@
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── prepare/integration-depth.test.ts ──────────────────────────────
+  # ── Plan schema + quota validation ──
   # test: prepare-plan.json has valid schema for broken-todo-demo Express app
-  # earlyTerminate: approval gate. Mirrors Jest assertPreparePlanSchema.
+  # earlyTerminate: stops at the approval gate once the plan is presented.
   - name: "Prepare Depth - Plan Schema For Express App"
     prompt: "I built a side project and want to get it live on Azure"
     tags:
@@ -180,7 +184,7 @@
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/prepare-plan.json"
-      # Jest assertPreparePlanSchema HARD: services[] non-empty, naming.resourcePrefix (len>=5),
+      # HARD: services[] non-empty, naming.resourcePrefix (len>=5),
       # costEstimate, iacFormat present
       - type: file-matches
         config:
@@ -247,11 +251,11 @@
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/prepare-plan.json"
-      # Jest HARD: quota / capacity / usage validated
+      # quota / capacity / usage validated
       - type: output-matches
         config:
           pattern: "(?i)quota|capacity|usage"
-      # Jest HARD: a specific region recommended
+      # a specific region recommended
       - type: output-matches
         config:
           pattern: "(?i)\\b(eastus2?|westus2?|centralus|northeurope|westeurope|southcentralus)\\b"
@@ -262,9 +266,9 @@
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
-  # ── prepare/integration-service-mapping.test.ts ────────────────────
+  # ── Service mapping: app dependencies → Azure services ──
   # test: golang-clean-web-api (Go/Gin + PostgreSQL + Redis + Elasticsearch)
-  # earlyTerminate: plan-presented (shouldEarlyTerminateForPlanPresented).
+  # earlyTerminate: plan-presented (earlyTerminate).
   - name: "Service Mapping - Go Gin Multi-Service"
     prompt: "I built a side project and want to get it live on Azure"
     tags:
@@ -297,11 +301,11 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: Go/Gin stack detected
+      # Go/Gin stack detected
       - type: output-matches
         config:
           pattern: "(?i)\\bgo\\b|\\bgin\\b|golang"
-      # docker-compose detected (Jest assertDockerComposeDetected — messages OR tool args).
+      # docker-compose detected.
       # The agent detects it by READING the compose file, not by verbalizing it, so we match
       # the file read (tool `path` arg) rather than assistant output.
       - type: tool-calls
@@ -324,7 +328,7 @@
 
   # test: aws-bookstore-demo routes to azure-cloud-migrate after prereq
   # earlyTerminate: route-to-migrate (custom — skill-call azure-cloud-migrate / context routeToSkill).
-  # NOTE: executor auto-loads all plugin skills, so azure-cloud-migrate is available.
+  # NOTE: all skills are available, so an AWS workload can route to azure-cloud-migrate.
   - name: "Migration Routing - AWS Workload To Cloud Migrate"
     prompt: "We're running this app today. How do we bring it to Azure with minimal changes?"
     tags:
@@ -356,7 +360,7 @@
     constraints:
       max_turns: 80
     graders:
-      # Jest HARD: routed to azure-cloud-migrate
+      # routed to azure-cloud-migrate
       - type: skill-invocation
         config:
           required: ["azure-cloud-migrate"]
@@ -399,7 +403,7 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest: Dockerfile explored + docker-compose detected
+      # Dockerfile explored + docker-compose detected
       - type: output-matches
         config:
           pattern: "(?i)dockerfile|docker-compose|docker compose|compose\\.y"
@@ -454,7 +458,7 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # docker-compose detected (Jest assertDockerComposeDetected — messages OR tool args);
+      # docker-compose detected;
       # match the compose file read (tool `path` arg) rather than assistant output.
       - type: tool-calls
         config:
@@ -462,15 +466,15 @@
             - name: "(?i)^(view|read_file|cat|glob)$"
               args:
                 path: "(?i)docker-compose|compose\\.ya?ml"
-      # Jest HARD: PostgreSQL → Azure Database for PostgreSQL
+      # PostgreSQL → Azure Database for PostgreSQL
       - type: output-matches
         config:
           pattern: "(?i)azure database for postgresql|flexible server|postgresql[\\s\\S]{0,60}azure"
-      # Jest HARD: Redis → Azure Cache for Redis
+      # Redis → Azure Cache for Redis
       - type: output-matches
         config:
           pattern: "(?i)azure cache for redis|redis[\\s\\S]{0,60}azure"
-      # Jest HARD: workspace scan facts surfaced
+      # workspace scan facts surfaced
       - type: output-matches
         config:
           pattern: "(?i)found|detected|discovered|scan"
@@ -517,15 +521,15 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: Java/Gradle/Spring Boot detected
+      # Java/Gradle/Spring Boot detected
       - type: output-matches
         config:
           pattern: "(?i)gradle|build\\.gradle|spring boot|spring|java"
-      # Jest HARD: Kafka → Azure Event Hubs
+      # Kafka → Azure Event Hubs
       - type: output-matches
         config:
           pattern: "(?i)event hubs|eventhubs|kafka[\\s\\S]{0,40}protocol|kafka-compatible"
-      # Jest HARD: PostgreSQL dependency detected
+      # PostgreSQL dependency detected
       - type: output-matches
         config:
           pattern: "(?i)postgres|postgresql"

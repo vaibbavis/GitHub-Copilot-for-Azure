@@ -1,10 +1,36 @@
+# Vally eval config — azure-app-onboard Fast Track e2e (split from eval.yaml for parallel runs)
+# Source: tests/azure-app-onboard/integration-fast-track.test.ts
+#
+# Standalone so it can run in parallel with wetty.eval.yaml. Real Azure deploy
+# (cost: azure) — App Service Free (F1) / Static Web Apps Free. Filter with
+# `--tag debug=fasttrack-html`. Runs to natural completion (no earlyTerminate);
+# the shell-command-invoked grader (required: az deploy) is the pass criterion.
+name: azure-app-onboard-fasttrack-eval
+description: |
+  Standalone e2e deploy eval for the azure-app-onboard Fast Track path:
+  a simple static HTML site deploys to Azure App Service Free (F1) / Static Web Apps Free.
+
+tags:
+  type: integration
+  skill: azure-app-onboard
+
+defaults:
+  runs: 1
+  timeout: "45m"
+  executor: integration-test-agent-runner
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 0.8
+
+stimuli:
   # ── integration-fast-track.test.ts ─────────────────────────────────
   # test: e2e — simple HTML site deploys to free tier (Azure-Samples/app-service-web-html-get-started)
   # No `earlyTerminate` — runs to natural completion (matches python-appservice-deploy Flask e2e pattern).
   # Rationale: earlyTerminate substring-match on tool args is unsafe — false-positives on scaffold
-  # content (heredoc text, deploy-checklist.md content). Post-run tool-calls grader validates that
-  # `az webapp deploy` or `az staticwebapp create` was actually invoked.
-  # NOTE: no `completed` grader either — tool-calls grader is the pass criterion.
+  # content (heredoc text, deploy-checklist.md content). Post-run shell-command-invoked grader validates
+  # that `az webapp deploy` or `az staticwebapp create` was actually invoked.
+  # NOTE: no `completed` grader either — the shell-command-invoked grader is the pass criterion.
   - name: "Fast Track - HTML Site Free Tier"
     prompt: "I have an app in GitHub — can you deploy it to Azure for me?"
     environment:
@@ -40,6 +66,13 @@
         config:
           required:
             - azure-app-onboard
+      # Sub-agents MUST be dispatched via the `task` tool (delegation, not inlined).
+      # Vally emits no subagent.* events — the `task` tool call IS the dispatch signal
+      # (nothing else uses `task`). Mirrors Jest assertScaffoldSubagentsDispatched (task-count half).
+      - type: tool-calls
+        config:
+          required:
+            - name: "^task$"
       # HTML/static-site language MUST appear in output
       - type: output-matches
         config:
@@ -48,31 +81,28 @@
       - type: output-matches
         config:
           pattern: "(?i)free tier|f1|free|\\$0|static web"
-      # App Service deploy MUST have been executed — vally's tool-calls grader
-      # is shell-tokenized (verified on the wetty run), so the substring
-      # false-positive on bash heredocs does not apply here.
+      # App Service deploy MUST have been executed. Uses shell-command-invoked
+      # (not the built-in tool-calls grader): it strips heredoc bodies before
+      # matching, so disallowed patterns like "azd up" that appear as literal
+      # text in a plan/checklist file cannot false-positive.
       # Accept any of the valid deploy invocation paths:
       #   • `az webapp deploy` — App Service F1 (Round 4 path: zip deploy)
       #   • `az staticwebapp create` — direct SWA CLI creation
       #   • `az deployment sub create` — Bicep subscription-scope deploy (Round 5 path: SWA via Bicep template)
-      - type: tool-calls
+      - type: shell-command-invoked
         config:
           required:
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)az\\s+webapp\\s+deploy\\b|az\\s+staticwebapp\\s+create\\b|az\\s+deployment\\s+(sub|group)\\s+create\\b"
+            - command: "(?i)az\\s+webapp\\s+deploy\\b|az\\s+staticwebapp\\s+create\\b|az\\s+deployment\\s+(sub|group)\\s+create\\b"
+              description: "App Service / SWA / Bicep deploy executed"
           disallowed:
-            # Bicep is the default IaC — no Terraform
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)terraform\\s+(init|plan|apply)"
-            # No azd fallback — this stimulus tests az CLI path
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)azd\\s+(up|provision|deploy)\\b"
-            # No imperative resource create — flow uses IaC
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)\\baz\\s+(group|webapp|appservice)\\s+create\\b"
-            # Deprecated `az webapp up` — negative lookahead excludes `az webapp update`
-            - name: "(?i)^(bash|powershell|pwsh)$"
-              command: "(?i)\\baz\\s+webapp\\s+up(?!date)\\b"
+            - command: "(?i)terraform\\s+(init|plan|apply)"
+              description: "Bicep is default IaC — no Terraform"
+            - command: "(?i)azd\\s+(up|provision|deploy)\\b"
+              description: "no azd fallback — tests az CLI path"
+            - command: "(?i)\\baz\\s+(group|webapp|appservice)\\s+create\\b"
+              description: "no imperative resource create — flow uses IaC"
+            - command: "(?i)\\baz\\s+webapp\\s+up(?!date)\\b"
+              description: "no deprecated az webapp up (excludes az webapp update)"
       # Agent MUST NOT hand back manual "Next Steps" instead of executing
       - type: output-not-matches
         config:
@@ -82,9 +112,13 @@
         config:
           pattern: "(?i)terraform\\s+(init|plan|apply)|hashicorp/azurerm"
       # Fast-track: static site → no stack/DB/auth questions
+      # (Mirrors Jest fast-track violation check — covers both `what ...?` and `which ...?` phrasings.)
       - type: output-not-matches
         config:
           pattern: "(?i)what (stack|language|framework|database|auth).*\\?"
+      - type: output-not-matches
+        config:
+          pattern: "(?i)which (database|auth|framework).*\\?"
       - type: output-not-matches
         config:
           pattern: "(?i)fatal error|unhandled exception|stack trace"
@@ -165,6 +199,16 @@
         config:
           path: "**/.copilot-azure/sessions/**/deploy-result.json"
           pattern: '"sessionId"\s*:\s*"[0-9a-f\-]{36}"'
+      # subscriptionId MUST be present (schema-required field per deploy-schemas.ts / Jest assertDeployResultSchema).
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"subscriptionId"\s*:\s*"[0-9a-f\-]{36}"'
+      # resourceIds array MUST be present (deploy-schemas.ts expects it; Jest warns when missing).
+      - type: file-matches
+        config:
+          path: "**/.copilot-azure/sessions/**/deploy-result.json"
+          pattern: '"resourceIds"\s*:\s*\['
       # healthStatus MUST be one of the DeployResult enum values from deploy-schemas.ts.
       - type: file-matches
         config:

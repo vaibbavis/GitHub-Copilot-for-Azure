@@ -1,22 +1,23 @@
-# ── onboard/*.test.ts — azure-app-onboard pipeline eval (invocation · negative · remediation ·
-#    pipeline-flow · catalog) ──
-# New format (see seeded-deploy-eval.yaml / integration-fast-track-vaibs.yaml): file/output/
-# tool-call graders. earlyTerminate mirrors the Jest shouldEarlyTerminate* helpers and always OR's
-# in a deploy-command condition as a safety net, so every stimulus halts BEFORE a real Azure deploy
-# (cost: llm+execute, never cost: azure).
+# azure-app-onboard — pipeline behavior suite: first-turn routing, safety/refusal on bad repos,
+# broken-app remediation, resumable pipeline flow, and plan quality on real sample repos.
 #
-# NOT ported: assertNoSubagentFailures — its subagent.failed event path is dropped by the executor
-# (a low-signal "nothing broke" negative check; the task-result-failure half is too weak to grade).
-# assertPricingHandled and assertQuotaSubagentDispatched ARE ported on the catalog stimuli via their
-# tool-call / output paths (MCP pricing tool, $/free-tier output, and `task` delegation — all survive
-# the executor). Where a Jest check is SOFT (testComments.push, no expect()), it is omitted or kept
-# lenient; only HARD expect() assertions become hard graders.
-#   integration-invocation.test.ts (4) · integration-negative.test.ts (3) ·
-#   integration-remediation.test.ts (1) · integration-pipeline-flow.test.ts (3) ·
-#   integration-catalog.test.ts (3)
+# How to read this suite (reviewer notes):
+#   • Every stimulus stops before any real Azure provisioning. `earlyTerminate` ends the run once
+#     the behavior under test has been observed, and always includes a deploy-command guard
+#     (azd up / az deployment / terraform apply) so a live deploy can never start. All runs are
+#     cost: llm+execute — no billed Azure resources.
+#   • Graders: `output-matches` / `output-not-matches` check the assistant's replies; `file-exists`
+#     / `file-matches` check the artifacts the skill writes under .copilot-azure/sessions/…;
+#     `tool-calls` checks which commands the agent actually ran.
+#   • On the plan-quality stimuli, quota/pricing delegation is checked via a `task` dispatch plus a
+#     pricing signal in the output. Whether a delegated sub-agent internally failed is not
+#     observable from the transcript, so that is not graded.
+#
+# Groups: routing (4) · safety/refusal (3) · remediation (1) · pipeline flow (3) · plan quality (3).
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # integration-invocation.test.ts — routing + first-turn depth (no real deploy)
+  # Routing + first-turn depth — the skill should engage for onboarding prompts and give useful
+  # planning guidance (services, auth, cost) without provisioning anything.
   # ═══════════════════════════════════════════════════════════════════════════
 
   # test: invokes azure-app-onboard for startup MVP prompt (standalone, no workspace)
@@ -38,7 +39,7 @@
     constraints:
       max_turns: 40
     graders:
-      # Jest HARD: invocation rate >= 0.5 (standalone prompts are flakier)
+      # invocation rate >= 0.5 (standalone prompts are flakier)
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
@@ -60,7 +61,7 @@
     constraints:
       max_turns: 40
     graders:
-      # Jest HARD: invocation rate >= 0.8
+      # invocation rate >= 0.8
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
@@ -82,7 +83,7 @@
     constraints:
       max_turns: 40
     graders:
-      # Jest HARD: invocation rate >= 0.8
+      # invocation rate >= 0.8
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
@@ -112,19 +113,19 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: must mention auth/identity (user asked for company login)
+      # must mention auth/identity (user asked for company login)
       - type: output-matches
         config:
           pattern: "(?i)entra|azure ad|active directory|\\bsso\\b|identity|oauth|microsoft identity"
-      # Jest HARD: >=2 distinct services — require a compute service (auth grader above covers the 2nd)
+      # >=2 distinct services — require a compute service (auth grader above covers the 2nd)
       - type: output-matches
         config:
           pattern: "(?i)app service|container apps|azure functions|\\bfunctions\\b|static web"
-      # Jest HARD: must drive toward planning
+      # must drive toward planning
       - type: output-matches
         config:
           pattern: "(?i)architect|\\bplan\\b|recommend|suggest|\\btier\\b|\\bcost\\b|estimate"
-      # Jest HARD: must NOT re-ask what the user already answered
+      # must NOT re-ask what the user already answered
       - type: output-not-matches
         config:
           pattern: "(?i)how many users|number of users|expected.*user.*count"
@@ -136,7 +137,8 @@
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # integration-negative.test.ts — detect blockers, refuse to scaffold/deploy
+  # Safety / refusal — for unsupported, broken, or intentionally vulnerable repos the skill must
+  # flag the blocking issues and refuse to scaffold or deploy.
   # ═══════════════════════════════════════════════════════════════════════════
 
   # test: negative — bya-unsupported-web-app (migration, EOL stack + DynamoDB)
@@ -167,7 +169,7 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest assertBlockingIssuesFlagged: >=1 catalog keyword ...
+      # >=1 catalog keyword ...
       - type: output-matches
         config:
           pattern: "(?i)unsupported|end-of-life|\\beol\\b|dynamodb|upgrade|migrate|\\.net core 2\\.1|\\b2\\.1\\b"
@@ -175,11 +177,11 @@
       - type: output-matches
         config:
           pattern: "(?i)\\bblock|cannot proceed|must be (resolved|fixed)|not ready|critical|fix these|before[\\s\\S]{0,10}deploy(ment)?|before proceeding"
-      # Jest HARD: must NOT plan to provision DynamoDB on Azure (AWS-only → recommend Cosmos)
+      # must NOT plan to provision DynamoDB on Azure (AWS-only → recommend Cosmos)
       - type: output-not-matches
         config:
           pattern: "(?i)(provision|deploy)\\s+dynamo"
-      # Jest HARD (assertDoesNotScaffoldOrDeploy): no IaC writes / deploy commands
+      # no IaC writes / deploy commands
       - type: tool-calls
         config:
           disallowed:
@@ -220,14 +222,14 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest assertBlockingIssuesFlagged: catalog keyword + blocking language
+      # catalog keyword + blocking language
       - type: output-matches
         config:
           pattern: "(?i)missing|\\bfail\\b|broken|error|db\\.js|not found|crash|blocked"
       - type: output-matches
         config:
           pattern: "(?i)\\bblock|cannot proceed|must be (resolved|fixed)|not ready|critical|fix these|before[\\s\\S]{0,10}deploy(ment)?|before proceeding"
-      # Jest HARD (assertDoesNotScaffoldOrDeploy)
+      # must not scaffold or deploy (no IaC writes, no deploy commands)
       - type: tool-calls
         config:
           disallowed:
@@ -236,7 +238,7 @@
                 path: "(?i)\\.bicep|\\.tf"
             - name: "(?i)^(bash|powershell|pwsh)$"
               command: "(?i)azd\\s+(up|provision)|az\\s+deployment\\s+(sub|group)\\s+create|terraform\\s+apply"
-      # Jest HARD: must suggest remediation
+      # must suggest remediation
       - type: output-matches
         config:
           pattern: "(?i)\\b(fix|resolve|install|update|add|create)\\b"
@@ -271,14 +273,14 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest assertBlockingIssuesFlagged: security keyword + blocking language
+      # security keyword + blocking language
       - type: output-matches
         config:
           pattern: "(?i)vulnerab|hack|security|exploit|unsafe|intentional|sql injection|\\bxss\\b|\\bcsrf\\b|brute|blocked"
       - type: output-matches
         config:
           pattern: "(?i)\\bblock|cannot proceed|must be (resolved|fixed)|not ready|critical|fix these|before[\\s\\S]{0,10}deploy(ment)?|before proceeding"
-      # Jest HARD (assertDoesNotScaffoldOrDeploy)
+      # must not scaffold or deploy (no IaC writes, no deploy commands)
       - type: tool-calls
         config:
           disallowed:
@@ -287,7 +289,7 @@
                 path: "(?i)\\.bicep|\\.tf"
             - name: "(?i)^(bash|powershell|pwsh)$"
               command: "(?i)azd\\s+(up|provision)|az\\s+deployment\\s+(sub|group)\\s+create|terraform\\s+apply"
-      # Jest HARD (assertDoesNotBlindlyApprove)
+      # must not blindly approve or claim everything is fine
       - type: output-not-matches
         config:
           pattern: "(?i)here('?s| is) (the|your) (full )?architecture plan|everything looks good|no issues found"
@@ -296,11 +298,12 @@
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # integration-remediation.test.ts — detect → fix → re-evaluate → scaffold
+  # Remediation — for a fixable-but-broken repo the skill should detect the issue, fix it,
+  # re-run its readiness check, then continue into scaffolding.
   # ═══════════════════════════════════════════════════════════════════════════
 
   # test: remediation — bya-broken-web-app (detect → fix → continue to scaffold)
-  # Runs to scaffold-manifest so the post-fix IaC lands on disk (Jest hasBicepOnDisk), then halts
+  # Runs to scaffold-manifest so the post-fix IaC lands on disk, then halts
   # BEFORE the real deploy (deploy-command safety net).
   - name: "Remediation - Broken App Detect Fix Scaffold"
     prompt: "Can Azure automatically figure out how my app should be deployed?"
@@ -332,31 +335,31 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest: detection — blocking issues flagged
+      # detection — blocking issues flagged
       - type: output-matches
         config:
           pattern: "(?i)missing|\\bfail\\b|broken|error|db\\.js|not found|crash|blocked"
-      # Jest assertReEvaluationAfterFix (approximated — re-eval evidence in output)
+      # re-evaluation evidence appears in the output (the agent re-checked after fixing)
       - type: output-matches
         config:
           pattern: "(?i)re-evaluat|re-scan|re-check|scan again|checking again|re-running|resolved|verified|0 remaining"
-      # Jest HARD: Express detected
+      # Express detected
       - type: output-matches
         config:
           pattern: "(?i)\\bexpress\\b"
-      # Jest HARD: App Service recommended post-fix
+      # App Service recommended post-fix
       - type: output-matches
         config:
           pattern: "(?i)app service"
-      # Jest HARD: cost estimation
+      # cost estimation
       - type: output-matches
         config:
           pattern: "(?i)\\bcost\\b|pricing|\\$\\d"
-      # Jest HARD: IaC produced on disk post-fix
+      # IaC produced on disk post-fix
       - type: file-exists
         config:
           path: "**/infra/**/*.bicep"
-      # Jest HARD: suggests remediation
+      # suggests remediation
       - type: output-matches
         config:
           pattern: "(?i)\\b(fix|resolve|install|update|add|create)\\b"
@@ -365,7 +368,8 @@
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # integration-pipeline-flow.test.ts — resumption, intent stall, zero-code
+  # Pipeline flow — resuming a pre-existing session, proceeding on vague input, and the zero-code
+  # path (empty workspace → scaffold a starter app → readiness scan).
   # ═══════════════════════════════════════════════════════════════════════════
 
   # test: agent resumes from pre-seeded session, skips completed phases
@@ -395,15 +399,15 @@
     constraints:
       max_turns: 80
     graders:
-      # Jest HARD: acknowledges existing session/plan (routing may vary → no skill-invocation gate)
+      # acknowledges existing session/plan (routing may vary → no skill-invocation gate)
       - type: output-matches
         config:
           pattern: "(?i)existing|previous|resume|continue|session|\\bplan\\b"
-      # Jest HARD: must NOT re-run the prereq scan (already completed)
+      # must NOT re-run the prereq scan (already completed)
       - type: output-not-matches
         config:
           pattern: "(?i)scanning your code|prerequisite scan|checking readiness"
-      # Jest HARD: references the prepare plan or moves to scaffold
+      # references the prepare plan or moves to scaffold
       - type: output-matches
         config:
           pattern: "(?i)prepare-plan|scaffold|bicep|infrastructure|\\bb1\\b|app service"
@@ -412,7 +416,7 @@
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # test: agent proceeds with defaults after vague responses
-  # NOTE: Jest is fully SOFT here (accepts non-invocation and only warns) — the only firm signal is
+  # NOTE: this is a lenient check — the only firm signal is
   # that the agent makes progress and does not crash. Kept lenient to stay faithful.
   - name: "Pipeline - Intent Stall Defaults"
     prompt: "I want to do something with Azure"
@@ -432,7 +436,7 @@
     constraints:
       max_turns: 40
     graders:
-      # lenient progress signal (Jest soft: assumptions / defaults / a service recommendation)
+      # lenient progress signal
       - type: output-matches
         config:
           pattern: "(?i)assum|default|recommend|suggest|app service|container apps|\\bfunctions\\b|static web|azure"
@@ -464,11 +468,11 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: asks about app type or detects from prompt
+      # asks about app type or detects from prompt
       - type: output-matches
         config:
           pattern: "(?i)task management|what kind|what are you building|\\bnode\\b|express|scaffold"
-      # Jest HARD (assertSessionFileCreated): session context.json written
+      # session context.json written
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/context.json"
@@ -477,7 +481,8 @@
           pattern: "(?i)fatal error|unhandled exception|stack trace"
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # integration-catalog.test.ts — plan quality on real repos
+  # Plan quality on real repos — detect the stack, recommend services, produce a cost estimate, and
+  # (for repos that already ship IaC) detect it and do not overwrite it.
   # ═══════════════════════════════════════════════════════════════════════════
 
   # test: e2e — bya-simple-web-app (plan quality at the approval gate)
@@ -510,34 +515,34 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: Express detected
+      # Express detected
       - type: output-matches
         config:
           pattern: "(?i)\\bexpress\\b"
-      # Jest HARD: cost signal
+      # cost signal
       - type: output-matches
         config:
           pattern: "(?i)\\bcost\\b|pricing|\\$\\d"
-      # Jest assertPricingHandled: real pricing produced (dollar amount / free-tier / monthly qualifier)
+      # real pricing produced (dollar amount / free-tier / monthly qualifier)
       # — covers the MCP-pricing + free-tier-shortcut paths; the sub-agent path also surfaces $ in output
       - type: output-matches
         config:
           pattern: "(?i)\\$\\s?\\d|\\$0|free[- ]?tier|per month|/month|monthly"
-      # Jest assertQuotaSubagentDispatched: prepare delegates quota/pricing to a sub-agent. The
-      # `task` tool call survives the executor (isSubagentDispatched path); a task fires by the gate.
+      # prepare delegates quota/pricing to a sub-agent. The
+      # `task` tool call is emitted whenever the skill delegates work to a sub-agent; one fires by the approval gate.
       - type: tool-calls
         config:
           required:
             - name: "(?i)^task$"
-      # Jest HARD: App Service or Container Apps recommended
+      # App Service or Container Apps recommended
       - type: output-matches
         config:
           pattern: "(?i)app service|container apps"
-      # Jest HARD: database or auth dependency detected
+      # database or auth dependency detected
       - type: output-matches
         config:
           pattern: "(?i)sqlite|database|\\bauth\\b|bcrypt|session|login"
-      # Jest HARD (assertPhaseArtifactsExist): prereq artifact written
+      # prereq artifact written
       - type: file-exists
         config:
           path: "**/.copilot-azure/sessions/**/prereq-output.json"
@@ -573,22 +578,22 @@
     constraints:
       max_turns: 90
     graders:
-      # Jest HARD: detects existing Azure infra (azure.yaml / Bicep / azd)
+      # detects existing Azure infra (azure.yaml / Bicep / azd)
       - type: output-matches
         config:
           pattern: "(?i)azure\\.yaml|\\bbicep\\b|\\bazd\\b|existing infra"
-      # Jest HARD (overwroteIaC === false): must NOT overwrite existing IaC
+      # must NOT overwrite existing IaC
       - type: tool-calls
         config:
           disallowed:
             - name: "(?i)^(create_file|write_file)$"
               args:
                 path: "(?i)main\\.bicep|main\\.tf|[\\\\/]infra[\\\\/]"
-      # Jest HARD: Remix stack detected
+      # Remix stack detected
       - type: output-matches
         config:
           pattern: "(?i)remix"
-      # Jest HARD: NOT fast-tracked — asks a question OR analyzes components
+      # NOT fast-tracked — asks a question OR analyzes components
       - type: output-matches
         config:
           pattern: "(?i)\\?|component|frontend|backend"
@@ -626,11 +631,11 @@
       - type: skill-invocation
         config:
           required: ["azure-app-onboard"]
-      # Jest HARD: multi-component detected
+      # multi-component detected
       - type: output-matches
         config:
           pattern: "(?i)multiple|component|frontend|backend"
-      # Jest HARD (>=2 stacks): React/TS/Vite ...
+      # React/TS/Vite ...
       - type: output-matches
         config:
           pattern: "(?i)react|typescript|vite"
@@ -638,22 +643,22 @@
       - type: output-matches
         config:
           pattern: "(?i)fastapi|python"
-      # Jest HARD: cost signal
+      # cost signal
       - type: output-matches
         config:
           pattern: "(?i)\\bcost\\b|pricing|\\$\\d"
-      # Jest assertPricingHandled: real pricing produced (dollar amount / free-tier / monthly qualifier)
+      # real pricing produced (dollar amount / free-tier / monthly qualifier)
       # — covers the MCP-pricing + free-tier-shortcut paths; the sub-agent path also surfaces $ in output
       - type: output-matches
         config:
           pattern: "(?i)\\$\\s?\\d|\\$0|free[- ]?tier|per month|/month|monthly"
-      # Jest assertQuotaSubagentDispatched: prepare delegates quota/pricing to a sub-agent. The
-      # `task` tool call survives the executor (isSubagentDispatched path); a task fires by the gate.
+      # prepare delegates quota/pricing to a sub-agent. The
+      # `task` tool call is emitted whenever the skill delegates work to a sub-agent; one fires by the approval gate.
       - type: tool-calls
         config:
           required:
             - name: "(?i)^task$"
-      # Jest (assertDatabaseDetected postgresql): PostgreSQL → Azure equivalent
+      # PostgreSQL → Azure equivalent
       - type: output-matches
         config:
           pattern: "(?i)postgres|flexible server"
