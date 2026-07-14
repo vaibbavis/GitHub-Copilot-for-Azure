@@ -1,7 +1,7 @@
 # azure-app-onboard — pipeline behavior suite: first-turn routing, safety/refusal on bad repos,
 # broken-app remediation, resumable pipeline flow, and plan quality on real sample repos.
 #
-# How to read this suite (reviewer notes):
+# How to read this suite:
 #   • Every stimulus stops before any real Azure provisioning. `earlyTerminate` ends the run once
 #     the behavior under test has been observed, and always includes a deploy-command guard
 #     (azd up / az deployment / terraform apply) so a live deploy can never start. All runs are
@@ -15,6 +15,27 @@
 #
 # Groups: routing (4) · safety/refusal (3) · remediation (1) · pipeline flow (3) · plan quality (3).
 
+name: azure-app-onboard-eval
+description: |
+  Pipeline-behavior suite for the azure-app-onboard skill: first-turn routing, safety/refusal on
+  unsupported, broken, or intentionally vulnerable repos, broken-app remediation, resumable
+  pipeline flow, and plan quality on real sample repos. All stimuli stop before real Azure
+  provisioning (cost: llm+execute).
+
+tags:
+  type: integration
+  skill: azure-app-onboard
+
+defaults:
+  runs: 1
+  timeout: "25m"
+  executor: integration-test-agent-runner
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 0.8
+
+stimuli:
   # ═══════════════════════════════════════════════════════════════════════════
   # Routing + first-turn depth — the skill should engage for onboarding prompts and give useful
   # planning guidance (services, auth, cost) without provisioning anything.

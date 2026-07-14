@@ -1,7 +1,7 @@
   # azure-app-onboard — prepare-phase suite: planning depth (services, SKUs, cost, quota) and
   # correctly mapping app dependencies to Azure services before anything is built.
   #
-  # How to read this suite (reviewer notes):
+  # How to read this suite:
   #   • `earlyTerminate` stops each run once the plan is presented (the approval gate, or a
   #     prepare-plan.json write), and always OR's in a deploy-command guard, so no real deploy runs.
   #     All runs are cost: llm+execute — no billed Azure resources.
@@ -10,6 +10,26 @@
   #
   # Stimuli: delegation to planning (2) · cost depth (1) · plan-schema depth (2) · service mapping (5).
 
+name: azure-app-onboard-prepare-eval
+description: |
+  Prepare-phase suite for the azure-app-onboard skill: planning depth (services, SKUs, cost,
+  quota) and correctly mapping app dependencies to Azure services before anything is built.
+  All stimuli stop at the approval gate (cost: llm+execute).
+
+tags:
+  type: integration
+  skill: azure-app-onboard
+
+defaults:
+  runs: 1
+  timeout: "12m"
+  executor: integration-test-agent-runner
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 0.8
+
+stimuli:
   # ── Delegation to planning ──
   # test: parent delegates to prepare for architecture planning prompt
   - name: "Delegation - Architecture Planning"

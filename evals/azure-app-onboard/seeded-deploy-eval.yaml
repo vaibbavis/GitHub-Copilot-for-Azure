@@ -1,7 +1,7 @@
   # azure-app-onboard — end-to-end deploy suite: from a scaffold-complete workspace, run the real
   # deploy and hand off to the user. These stimuli DO provision real Azure resources (cost: azure).
   #
-  # How to read this suite (reviewer notes):
+  # How to read this suite:
   #   • Each run starts from a pre-built, deploy-ready workspace (app code + infra/ + prior-phase
   #     session artifacts) fetched from a fixture branch, so the agent goes straight to deploy.
   #   • No `earlyTerminate` — the run goes to natural completion so long-running deploy commands
@@ -10,6 +10,26 @@
   #     context.json, deployment-summary.md, generated infra/*.bicep).
   #   • Test 1 = App Service · Test 2 = Container Apps (which also covers the post-deploy handoff).
 
+name: azure-app-onboard-seeded-deploy-eval
+description: |
+  End-to-end deploy suite for the azure-app-onboard skill: from a scaffold-complete workspace,
+  run the real deploy and hand off to the user. These stimuli provision real Azure resources
+  (cost: azure).
+
+tags:
+  type: integration
+  skill: azure-app-onboard
+
+defaults:
+  runs: 1
+  timeout: "90m"
+  executor: integration-test-agent-runner
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 0.8
+
+stimuli:
   # ── Test 1: App Service deploy — safety, depth, imperative-CLI/Entra-auth, password ──
   - name: "Deploy Verify - App Service Pipeline"
     prompt: "Use the azure-app-onboard skill to deploy my code to Azure."

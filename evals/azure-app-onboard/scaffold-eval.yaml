@@ -1,7 +1,7 @@
 # azure-app-onboard — scaffold-phase suite: generating infrastructure-as-code for a fresh app,
 # and correctly detecting (and not overwriting) infrastructure that a repo already ships.
 #
-# How to read this suite (reviewer notes):
+# How to read this suite:
 #   • `earlyTerminate` stops each run at the first IaC write / scaffold-manifest write / existing-IaC
 #     decision point, and always OR's in a deploy-command guard, so a live `az deployment` / `azd up`
 #     / `terraform apply` can never run. All runs are cost: llm+execute — no billed Azure resources.
@@ -12,6 +12,26 @@
 # Stimuli: Bicep generation for a fresh app (1) · existing-IaC detect-and-preserve (3) ·
 #          generated-IaC security baseline (1).
 
+name: azure-app-onboard-scaffold-eval
+description: |
+  Scaffold-phase suite for the azure-app-onboard skill: generating infrastructure-as-code for a
+  fresh app, and correctly detecting (and not overwriting) infrastructure a repo already ships.
+  All stimuli stop before real provisioning (cost: llm+execute).
+
+tags:
+  type: integration
+  skill: azure-app-onboard
+
+defaults:
+  runs: 1
+  timeout: "25m"
+  executor: integration-test-agent-runner
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 0.8
+
+stimuli:
   # ── Test 1: scaffold generates Bicep for a simple app (broken-todo-demo) ──
   # softCheckSkill · IaC content present · secure defaults · no deploy w/o approval.
   # Runs to scaffold completion (earlyTerminate on the scaffold-manifest write, like the Security
