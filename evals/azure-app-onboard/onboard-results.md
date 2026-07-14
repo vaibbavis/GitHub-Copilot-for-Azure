@@ -19,6 +19,16 @@
 > `Scaffold - IaC Security Baseline` (25m timeout → passed in 23.4m) and
 > `Deploy Verify - Container Apps Pipeline` (90m timeout → passed on retry in 47m).
 
+## Final verdict (after retry) — 29/31 (93.5%)
+
+| Spec | Final | Note |
+|------|:-----:|------|
+| onboard-eval | **14/14** | all 3 retries recovered |
+| prepare-eval | **9/10** | `Quota Validation Before Region` persistent fail |
+| scaffold-eval | **4/5** | `Existing Azd Foundry Detect` persistent fail |
+| seeded-deploy-eval | **2/2** | clean first pass (real deploys) |
+| **Total** | **29/31** | 6 of 8 first-pass failures were flaky (recovered on retry); **2 persistent routing gaps** remain |
+
 ## Per-stimulus status
 
 ### onboard-eval (11/14)
@@ -87,14 +97,29 @@
 - **1/8 output-phrasing negative** (#1 DVWA) — likely incidental-phrase false-positive.
 - **1/8 service-mapping output gap** (#6 Kafka→Event Hubs).
 
-## Retry pass (failed stimuli only)
+## Retry pass (failed stimuli only) — COMPLETE
 
-_Status: RUNNING (background). This section will be updated with per-stimulus retry outcomes._
+Re-ran the 8 first-pass failures once (sequential, `llm+execute`). **6 recovered, 2 persistent.**
 
-Retrying by `debug` tag:
-- onboard: `onboard-negative-dvwa`, `onboard-negative-unsupported`, `onboard-pipeline-zerocode`
-- prepare: `prepare-depth-schema`, `prepare-depth-quota`, `prepare-map-kafka`
-- scaffold: `scaffold-bicep-gen`, `scaffold-existing-foundry`
+| Stimulus | Retry | Note |
+|----------|:-----:|------|
+| onboard · DVWA Vulnerable Halt | ✅ PASS (6/6) | flaky phrasing — recovered |
+| onboard · Unsupported App Migration | ✅ PASS (6/6) | flaky routing — recovered |
+| onboard · Zero Code Scaffolding | ✅ PASS (4/4) | flaky routing — recovered |
+| prepare · Plan Schema (Express) | ✅ PASS (9/9) | `prepare-plan.json` written — recovered |
+| prepare · Kafka → Event Hubs | ✅ PASS (6/6) | mapping surfaced — recovered |
+| prepare · Quota Validation Before Region | ❌ FAIL (1/6) | **persistent** — skill not invoked (8 turns/112s short-circuit) |
+| scaffold · Bicep Generation Simple App | ✅ PASS (8/8) | `scaffold-manifest.json` written — recovered |
+| scaffold · Existing Azd Foundry Detect No Overwrite | ❌ FAIL (4/5) | **persistent** — skill not invoked (engaged 10 other skills) |
+
+### Persistent failures (failed BOTH passes — genuine, not flaky)
+
+1. **prepare · Quota Validation Before Region** — prompt *"I want a one-click way to deploy my app to Azure."*
+   The agent short-circuits (~8 turns, ~110s) and never invokes `azure-app-onboard`; no prereq/prepare artifacts, no quota/region discussion. Identical signature both runs. Likely the "one-click" phrasing routes it away from the onboarding pipeline (or it answers directly).
+2. **scaffold · Existing Azd Foundry Detect No Overwrite** — prompt *"I have an existing app — what's the best way to migrate it to Azure?"*
+   `azure-app-onboard` is not invoked; the run engaged **10** other skills. The word **"migrate"** most likely routes to a competing skill (e.g. `azure-cloud-migrate`). The non-skill answer still detects Foundry + existing IaC (the other 4 graders pass), so only the invocation gate fails.
+
+> Both persistent failures are `skill-invocation` routing gaps on specific prompt phrasings ("one-click", "migrate") — not defects in the onboarding behavior itself. Worth a routing-description tweak if these prompts should own to `azure-app-onboard`.
 
 ## Azure resources created (Playground-02 · `…`)
 
