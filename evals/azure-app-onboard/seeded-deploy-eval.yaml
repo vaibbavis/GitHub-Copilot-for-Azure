@@ -95,6 +95,11 @@ stimuli:
               description: "no imperative plan mutation"
             - command: "(?i)config-zip"
               description: "no config-zip (needs SCM basic auth; Entra-only)"
+            # zip must preserve directory structure — no Compress-Archive -FullName
+            # (folds Jest zip-structure test `hasBadZipPattern === false`; rides along
+            #  on the App Service zip-deploy happy path — no separate failing run needed).
+            - name: "(?i)^(bash|powershell|pwsh)$"
+              command: "(?i)compress-archive.*fullname|\\$files\\.fullname"
 
       # ── SCM basic-auth lifecycle: publishing credentials are touched during code upload ──
       - type: shell-command-invoked
