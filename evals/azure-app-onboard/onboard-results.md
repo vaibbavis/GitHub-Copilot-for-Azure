@@ -96,7 +96,7 @@ Retrying by `debug` tag:
 - prepare: `prepare-depth-schema`, `prepare-depth-quota`, `prepare-map-kafka`
 - scaffold: `scaffold-bicep-gen`, `scaffold-existing-foundry`
 
-## Azure resources created (Playground-02 · `f6949045-…`)
+## Azure resources created (Playground-02 · `…`)
 
 > You chose to clean up yourself. All are tagged `pcnx-deleteafter=2026-07-21`, so the tenant reaper will auto-remove them then if you don't.
 
